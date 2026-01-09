@@ -10,11 +10,8 @@ from src.db.base import Base
 from src.db.models import Org, Course, Student, Enrollment, Document, DocumentChunk
 from src.core.config import settings
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 

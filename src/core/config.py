@@ -16,17 +16,17 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION_NAME: str = "course_knowledge"
     
-    # Embedding config - gemini-embedding-001 supports 768, 1536, 3072
+    # supports 768, 1536, 3072
     EMBEDDING_MODEL: str = "gemini-embedding-001"
-    EMBEDDING_DIM: int = 1536  # Balance of quality vs storage/speed
+    EMBEDDING_DIM: int = 1536  
     
     # Gemini API
     GEMINI_API_KEY: str = ""
     
     # JWT Authentication
-    JWT_SECRET_KEY: str = "your-secret-key-change-in-production"  # Change this!
+    JWT_SECRET_KEY: str = "your-secret-key-change-in-production"  # i can use CryptContext(schemes=["bcrypt"], deprecated="auto").token_urlsafe(32)
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
