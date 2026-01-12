@@ -11,7 +11,6 @@ def create_application() -> FastAPI:
         docs_url=f"{settings.API_V1_STR}/docs",
     )
 
-    # Include API routers
     application.include_router(auth_router, prefix=settings.API_V1_STR)
     application.include_router(tutor_router, prefix=settings.API_V1_STR)
     application.include_router(ingestion_router, prefix=settings.API_V1_STR)

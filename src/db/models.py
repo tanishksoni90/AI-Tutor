@@ -22,12 +22,20 @@ class Org(Base):
     courses = relationship("Course", back_populates="org")
     students = relationship("Student", back_populates="org")
 
+class CourseType(str, enum.Enum):
+    MICRO = "micro"  # Small courses: 20-30 sessions
+    CERTIFICATION = "certification"  # Large courses: 100+ sessions
+    STANDARD = "standard"  # Medium courses
+
 class Course(Base):
     __tablename__ = "courses"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(UUID(as_uuid=True), ForeignKey("orgs.id"), nullable=False)
     name = Column(String, nullable=False)
+    course_type = Column(String, default=CourseType.STANDARD.value, nullable=False)
+    total_sessions = Column(Integer, default=0, nullable=False)  # Updated during ingestion
+    total_chunks = Column(Integer, default=0, nullable=False)  # Cache for performance
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     org = relationship("Org", back_populates="courses")
