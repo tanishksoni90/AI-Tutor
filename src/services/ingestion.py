@@ -30,7 +30,7 @@ from src.db.repository.document import DocumentRepository, DocumentChunkReposito
 from src.db.repository.course import CourseRepository
 from src.db.qdrant import qdrant_client
 from src.services.pdf_parser import PDFParser, SlideContent
-from src.services.chunker import SlideAwareChunker, ChunkData
+from src.services.chunker import ContextualSlideAwareChunker, ChunkData
 from src.services.embeddings import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,30 @@ class IngestionService:
     - Check for duplicate ingestion (idempotency)
     - Parse PDF → chunks → embeddings → storage
     - Handle failures with proper cleanup
+    
+    Priority 2 Enhancement:
+    - Uses ContextualSlideAwareChunker for better context
+    - Includes previous slide context in chunks
     """
     
     def __init__(
         self,
         db: AsyncSession,
-        embedding_service: Optional[EmbeddingService] = None
+        embedding_service: Optional[EmbeddingService] = None,
+        use_contextual_chunking: bool = True  # Feature flag
     ):
         self.db = db
         self.embedding_service = embedding_service or get_embedding_service()
         self.pdf_parser = PDFParser()
-        self.chunker = SlideAwareChunker()
+        
+        # Use contextual chunker for better context awareness
+        if use_contextual_chunking:
+            self.chunker = ContextualSlideAwareChunker()
+            logger.info("Using ContextualSlideAwareChunker (Priority 2 feature)")
+        else:
+            from src.services.chunker import SlideAwareChunker
+            self.chunker = SlideAwareChunker()
+            logger.info("Using basic SlideAwareChunker")
         
         # Repositories
         self.doc_repo = DocumentRepository(Document, db)
