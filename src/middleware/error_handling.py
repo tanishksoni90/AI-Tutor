@@ -39,6 +39,8 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
     Global error handling middleware.
     
     Catches all unhandled exceptions and returns structured responses.
+    Note: HTTPException should be handled via app.exception_handler decorators
+    for proper FastAPI integration.
     """
     
     async def dispatch(self, request: Request, call_next):
@@ -53,16 +55,6 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             response.headers["X-Request-ID"] = request_id
             
             return response
-            
-        except HTTPException as exc:
-            # FastAPI HTTPException - pass through with structured format
-            return self._create_error_response(
-                request_id=request_id,
-                status_code=exc.status_code,
-                error_code=f"HTTP_{exc.status_code}",
-                message=exc.detail,
-                details=getattr(exc, "details", None)
-            )
             
         except Exception as exc:
             # Unhandled exception - log and return 500
@@ -102,22 +94,14 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
         details: Optional[dict] = None,
         trace: Optional[str] = None
     ) -> JSONResponse:
-        """Create structured error response."""
-        from datetime import datetime
-        
-        error_detail = ErrorDetail(
+        """Create structured error response (instance method for middleware)."""
+        return _create_error_response(
+            request_id=request_id,
+            status_code=status_code,
             error_code=error_code,
             message=message,
             details=details,
-            request_id=request_id,
-            timestamp=datetime.utcnow().isoformat(),
-            trace=trace if settings.ENV_MODE != "prod" else None
-        )
-        
-        return JSONResponse(
-            status_code=status_code,
-            content=error_detail.model_dump(exclude_none=True),
-            headers={"X-Request-ID": request_id}
+            trace=trace
         )
 
 
@@ -156,3 +140,94 @@ class ServiceUnavailableError(HTTPException):
             status_code=503,
             detail=f"Service unavailable: {service}"
         )
+
+
+# Exception handlers to be registered with FastAPI app
+def create_http_exception_handler(app):
+    """
+    Create and register HTTPException handler.
+    
+    Usage in main.py:
+        from src.middleware.error_handling import create_http_exception_handler
+        create_http_exception_handler(app)
+    """
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        
+        # Extract details from exception if available
+        details = None
+        if hasattr(exc, "details"):
+            details = exc.details
+        elif isinstance(exc.detail, dict):
+            details = exc.detail
+        
+        # If detail is a dict, use it as structured details and extract message
+        message = exc.detail
+        if isinstance(exc.detail, dict):
+            message = exc.detail.get("message", str(exc.detail))
+        
+        return _create_error_response(
+            request_id=request_id,
+            status_code=exc.status_code,
+            error_code=f"HTTP_{exc.status_code}",
+            message=message,
+            details=details
+        )
+    
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        
+        logger.error(
+            f"Unhandled exception in request {request_id}",
+            exc_info=True,
+            extra={
+                "request_id": request_id,
+                "path": request.url.path,
+                "method": request.method,
+                "client": request.client.host if request.client else None
+            }
+        )
+        
+        if settings.ENV_MODE == "prod":
+            message = "An internal error occurred. Please try again later."
+            trace = None
+        else:
+            message = str(exc)
+            trace = traceback.format_exc()
+        
+        return _create_error_response(
+            request_id=request_id,
+            status_code=500,
+            error_code="INTERNAL_SERVER_ERROR",
+            message=message,
+            trace=trace
+        )
+
+
+def _create_error_response(
+    request_id: str,
+    status_code: int,
+    error_code: str,
+    message: str,
+    details: Optional[dict] = None,
+    trace: Optional[str] = None
+) -> JSONResponse:
+    """Create structured error response (shared helper)."""
+    from datetime import datetime
+    
+    error_detail = ErrorDetail(
+        error_code=error_code,
+        message=message,
+        details=details,
+        request_id=request_id,
+        timestamp=datetime.utcnow().isoformat(),
+        trace=trace if settings.ENV_MODE != "prod" else None
+    )
+    
+    return JSONResponse(
+        status_code=status_code,
+        content=error_detail.model_dump(exclude_none=True),
+        headers={"X-Request-ID": request_id}
+    )

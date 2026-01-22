@@ -26,7 +26,10 @@ def validate_configuration() -> Tuple[bool, List[str]]:
         errors.append("PROJECT_NAME is not set")
     
     if not settings.GEMINI_API_KEY:
-        errors.append("GEMINI_API_KEY is not set - AI features will not work")
+        logger.warning(
+            "GEMINI_API_KEY not set — AI features (embeddings, tutor) will be disabled. "
+            "Set GEMINI_API_KEY in your .env file to enable AI functionality."
+        )
     
     if settings.JWT_SECRET_KEY == "your-secret-key-change-in-production":
         if settings.ENV_MODE == "prod":

@@ -7,7 +7,6 @@ Tests:
 3. Health checks
 4. Request logging
 5. CORS configuration
-6. Configuration validation
 """
 import asyncio
 import sys
@@ -158,15 +157,24 @@ class ProductionFeaturesTester:
                 response = await client.get(f"{self.base_url}/api/v1/nonexistent")
                 data = response.json()
                 
+                found = False
+                
                 if 'request_id' in data:
                     self.print_success("Structured error response includes request_id")
                     self.print_info(f"Request ID: {data['request_id']}")
+                    found = True
                 
                 if 'timestamp' in data:
                     self.print_success("Error includes timestamp")
+                    found = True
                 
                 if 'error_code' in data:
                     self.print_success(f"Error code: {data['error_code']}")
+                    found = True
+                
+                if not found:
+                    self.print_error("Missing expected fields: 'request_id', 'timestamp', or 'error_code'")
+                    return False
                 
                 return True
             except Exception as e:
@@ -216,17 +224,23 @@ class ProductionFeaturesTester:
                 )
                 
                 # Check CORS headers
+                cors_ok = False
+                
                 if 'access-control-allow-origin' in response.headers:
                     self.print_success(
                         f"CORS enabled: {response.headers['access-control-allow-origin']}"
                     )
+                    cors_ok = True
+                else:
+                    self.print_error("Missing required CORS header: 'access-control-allow-origin'")
+                    return False
                 
                 if 'access-control-expose-headers' in response.headers:
                     self.print_success(
                         f"Custom headers exposed: {response.headers['access-control-expose-headers']}"
                     )
                 
-                return True
+                return cors_ok
             except Exception as e:
                 self.print_error(f"CORS test failed: {str(e)}")
                 return False
@@ -259,6 +273,9 @@ class ProductionFeaturesTester:
         """Test API documentation endpoints."""
         self.print_header("TEST 8: API Documentation")
         
+        openapi_ok = False
+        swagger_ok = False
+        
         async with httpx.AsyncClient() as client:
             # Test OpenAPI JSON
             try:
@@ -268,6 +285,7 @@ class ProductionFeaturesTester:
                     self.print_success(f"OpenAPI spec available: {data.get('info', {}).get('title')}")
                     self.print_info(f"Version: {data.get('info', {}).get('version')}")
                     self.print_info(f"Endpoints: {len(data.get('paths', {}))}")
+                    openapi_ok = True
                 else:
                     self.print_error("OpenAPI spec not available")
             except Exception as e:
@@ -278,12 +296,13 @@ class ProductionFeaturesTester:
                 response = await client.get(f"{self.base_url}/api/v1/docs")
                 if response.status_code == 200:
                     self.print_success("Swagger UI accessible at /api/v1/docs")
+                    swagger_ok = True
                 else:
                     self.print_error("Swagger UI not accessible")
             except Exception as e:
                 self.print_error(f"Swagger UI test failed: {str(e)}")
             
-            return True
+            return openapi_ok and swagger_ok
     
     async def run_all_tests(self):
         """Run all production readiness tests."""
