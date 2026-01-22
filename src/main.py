@@ -20,7 +20,7 @@ from src.api.v1.tutor import router as tutor_router
 from src.api.v1.ingestion import router as ingestion_router
 from src.api.v1.health import router as health_router
 from src.middleware.rate_limiting import RateLimitMiddleware
-from src.middleware.error_handling import ErrorHandlingMiddleware
+from src.middleware.error_handling import ErrorHandlingMiddleware, create_http_exception_handler
 from src.middleware.logging import RequestLoggingMiddleware
 from src.middleware.cors import get_cors_config
 
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     validate_or_exit()
     
     logger.info("✓ All systems ready")
-    logger.info(f"📚 API Docs: http://localhost:8000{settings.API_V1_STR}/docs")
+    logger.info(f"📚 API Docs: {settings.API_V1_STR}/docs")
     logger.info("=" * 60)
     
     yield
@@ -109,24 +109,31 @@ def create_application() -> FastAPI:
     )
     
     # ============================================
+    # Exception Handlers (register before middleware)
+    # ============================================
+    create_http_exception_handler(application)
+    
+    # ============================================
     # Middleware (order matters!)
+    # NOTE: Middleware added FIRST runs LAST (wraps inner middleware)
+    # Execution order: CORS -> Rate Limiting -> Logging -> Error Handling -> Route Handler
     # ============================================
     
-    # 1. CORS - Must be first
+    # 1. CORS - Added first, runs first (outermost layer)
     cors_config = get_cors_config()
     application.add_middleware(
         CORSMiddleware,
         **cors_config
     )
     
-    # 2. Error handling - Catch all errors
-    application.add_middleware(ErrorHandlingMiddleware)
+    # 2. Rate limiting - Prevent abuse before processing
+    application.add_middleware(RateLimitMiddleware)
     
     # 3. Request logging - Log all requests
     application.add_middleware(RequestLoggingMiddleware)
     
-    # 4. Rate limiting - Prevent abuse
-    application.add_middleware(RateLimitMiddleware)
+    # 4. Error handling - Added last, runs last (catches errors from all middleware)
+    application.add_middleware(ErrorHandlingMiddleware)
     
     # ============================================
     # Routers

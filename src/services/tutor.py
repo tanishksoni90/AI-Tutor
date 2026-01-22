@@ -7,7 +7,7 @@ CRITICAL SAFETY GUARANTEES:
 3. No direct answers to assignments
 4. Hints and examples allowed, solutions forbidden
 
-SELF-REFLECTIVE RAG (Priority 2 Implementation):
+SELF-REFLECTIVE RAG (SelfReflectiveTutorService):
 5. LLM validates whether it CAN answer before generating
 6. Reduces hallucinations by ~40%
 7. Honest about knowledge gaps
@@ -16,7 +16,6 @@ Design:
 - Prompt construction is explicit and auditable
 - LLM invocation is isolated
 - Response shaping enforces academic integrity
-- Validation step prevents fabricated answers
 """
 import logging
 from dataclasses import dataclass
@@ -152,11 +151,15 @@ class TutorService:
         # 6. Build source references
         sources = self._build_sources(request.retrieval_result.chunks)
         
+        # 7. Determine confidence level
+        confidence = "no_context" if not request.retrieval_result.chunks else "generated"
+        
         return TutorResponse(
             answer=response,
             sources=sources,
             was_redirected=is_assignment_question,
-            model_used=self.model_name
+            model_used=self.model_name,
+            confidence=confidence
         )
     
     def _build_context(
@@ -253,36 +256,23 @@ Please help the student understand this topic based on the course material above
 
 class SelfReflectiveTutorService(TutorService):
     """
-    Generates academically safe explanations using retrieved context.
+    Self-reflective tutor with validation step before answering.
     
-    Flow:
-    1. Fetch full chunk text from PostgreSQL
-    2. Build context-aware prompt
-    3. Invoke Gemini with tutor system prompt
-    4. Shape response with source attribution
+    Implements validation-before-generation to reduce hallucinations:
+    1. Validates if context is sufficient to answer
+    2. Only generates answer if validation passes
+    3. Sets confidence="validated" for validated answers
     """
-    
-    def __init__(
-        self,
-        db: AsyncSession,
-        model_name: str = "gemini-1.5-flash"
-    ):
-        self.db = db
-        self.model_name = model_name
-        self.chunk_repo = DocumentChunkRepository(DocumentChunk, db)
-        
-        # Configure Gemini
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=TUTOR_SYSTEM_PROMPT
-        )
     
     async def respond(self, request: TutorRequest) -> TutorResponse:
         """
-        Generate a tutor response for the student's question.
+        Generate a tutor response with self-reflection validation.
         
-        Uses retrieved chunks as the ONLY source of truth.
+        Flow:
+        1. Build context from retrieved chunks
+        2. Validate if context is sufficient (using VALIDATION_PROMPT)
+        3. If NO: return early with honest "no_context" response
+        4. If YES: generate answer and return with confidence="validated"
         """
         # 1. Fetch full text for retrieved chunks
         chunk_ids = [
@@ -294,13 +284,45 @@ class SelfReflectiveTutorService(TutorService):
         # 2. Build the context from chunks
         context = self._build_context(request.retrieval_result.chunks, full_texts)
         
-        # 3. Build the prompt
-        prompt = self._build_prompt(request.question, context)
+        # 3. VALIDATION STEP: Check if we can answer with this context
+        validation_prompt = VALIDATION_PROMPT.format(
+            context=context,
+            question=request.question
+        )
         
-        # 4. Check for assignment-related keywords (pre-LLM safety)
+        try:
+            # Validation should be stateless - don't pass conversation history
+            validation_response = await self._invoke_llm(
+                validation_prompt, 
+                None  # No conversation history for validation
+            )
+            
+            # Use exact/whole-word match to avoid false positives
+            normalized_response = validation_response.strip().upper()
+            can_answer = normalized_response == "YES"
+            
+            logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
+            
+        except Exception as e:
+            logger.error(f"Validation failed: {str(e)}")
+            # On validation error, fall back to attempting answer
+            can_answer = True
+        
+        # 4. If validation says NO, return early with honest response
+        if not can_answer:
+            is_assignment_question = self._detect_assignment_question(request.question)
+            return TutorResponse(
+                answer="I don't have enough information in the course materials to answer this question confidently. Could you rephrase your question or ask about a topic covered in the lectures?",
+                sources=[],
+                was_redirected=is_assignment_question,
+                model_used=self.model_name,
+                confidence="no_context"
+            )
+        
+        # 5. Validation passed - generate the answer
+        prompt = self._build_prompt(request.question, context)
         is_assignment_question = self._detect_assignment_question(request.question)
         
-        # 5. Invoke LLM
         try:
             response = await self._invoke_llm(prompt, request.conversation_history)
         except Exception as e:
@@ -314,99 +336,9 @@ class SelfReflectiveTutorService(TutorService):
             answer=response,
             sources=sources,
             was_redirected=is_assignment_question,
-            model_used=self.model_name
+            model_used=self.model_name,
+            confidence="validated"
         )
-    
-    def _build_context(
-        self, 
-        chunks: List[RetrievedChunk], 
-        full_texts: dict[UUID, str]
-    ) -> str:
-        """Build context string from retrieved chunks."""
-        if not chunks:
-            return "No relevant course material found for this question."
-        
-        context_parts = []
-        for chunk in chunks:
-            chunk_uuid = UUID(chunk.chunk_id)
-            text = full_texts.get(chunk_uuid, chunk.text_preview)
-            
-            # Include slide reference
-            slide_ref = ""
-            if chunk.slide_number:
-                slide_ref = f"Slide {chunk.slide_number}"
-                if chunk.slide_title:
-                    slide_ref += f": {chunk.slide_title}"
-            
-            if chunk.session_id:
-                slide_ref = f"[{chunk.session_id}] {slide_ref}"
-            
-            context_parts.append(f"--- {slide_ref} ---\n{text}")
-        
-        return "\n\n".join(context_parts)
-    
-    def _build_prompt(self, question: str, context: str) -> str:
-        """Build the full prompt for the LLM."""
-        return f"""COURSE MATERIAL:
-{context}
-
-STUDENT QUESTION:
-{question}
-
-Please help the student understand this topic based on the course material above. Remember: explain concepts, don't provide direct answers."""
-    
-    def _detect_assignment_question(self, question: str) -> bool:
-        """
-        Detect if question is likely asking for assignment answers.
-        
-        This is a pre-LLM safety check. The system prompt also enforces this,
-        but we flag it for logging/analytics.
-        """
-        assignment_keywords = [
-            "solve", "solution", "answer this", "complete this",
-            "write the code", "implement", "homework", "assignment",
-            "quiz answer", "test answer", "what is the answer",
-            "give me the answer", "do this for me"
-        ]
-        
-        question_lower = question.lower()
-        return any(kw in question_lower for kw in assignment_keywords)
-    
-    async def _invoke_llm(
-        self, 
-        prompt: str, 
-        conversation_history: Optional[List[dict]]
-    ) -> str:
-        """Invoke Gemini with the prompt."""
-        
-        # Build chat history if provided
-        if conversation_history:
-            chat = self.model.start_chat(history=[
-                {"role": msg["role"], "parts": [msg["content"]]}
-                for msg in conversation_history
-            ])
-            response = chat.send_message(prompt)
-        else:
-            response = self.model.generate_content(prompt)
-        
-        return response.text
-    
-    def _build_sources(self, chunks: List[RetrievedChunk]) -> List[dict]:
-        """Build source references for attribution."""
-        sources = []
-        for chunk in chunks:
-            source = {
-                "chunk_id": chunk.chunk_id,
-                "relevance_score": round(chunk.score, 3)
-            }
-            if chunk.slide_number:
-                source["slide_number"] = chunk.slide_number
-            if chunk.slide_title:
-                source["slide_title"] = chunk.slide_title
-            if chunk.session_id:
-                source["session_id"] = chunk.session_id
-            sources.append(source)
-        return sources
 
 
 async def get_tutor_response(

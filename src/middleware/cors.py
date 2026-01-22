@@ -23,8 +23,18 @@ def get_cors_config():
             # Add your production frontend domains
         ]
         allow_credentials = True
-        allow_methods = ["GET", "POST", "PUT", "DELETE"]
-        allow_headers = ["*"]
+        allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        allow_headers = [
+            "Authorization",
+            "Content-Type",
+            "X-Request-ID",
+            "Accept",
+            "Origin",
+            "User-Agent",
+            "DNT",
+            "Cache-Control",
+            "X-Requested-With"
+        ]
         
     else:
         # Development: More permissive
@@ -36,8 +46,18 @@ def get_cors_config():
             "http://127.0.0.1:5173",
         ]
         allow_credentials = True
-        allow_methods = ["*"]
-        allow_headers = ["*"]
+        allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+        allow_headers = [
+            "Authorization",
+            "Content-Type",
+            "X-Request-ID",
+            "Accept",
+            "Origin",
+            "User-Agent",
+            "DNT",
+            "Cache-Control",
+            "X-Requested-With"
+        ]
     
     return {
         "allow_origins": allowed_origins,

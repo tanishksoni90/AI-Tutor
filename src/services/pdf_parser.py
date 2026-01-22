@@ -98,7 +98,7 @@ class PDFParser:
         raw_blocks = []
         
         for block in blocks:
-            if block["type"] != 0:  # Skip non-text blocks (images, etc.)
+            if block["type"] != 0:  
                 continue
                 
             block_text = ""
@@ -126,13 +126,11 @@ class PDFParser:
                 "bbox": block.get("bbox")
             })
             
-            # Heuristic: First large text = title
             if title is None and max_font_size >= self.title_font_size_threshold:
                 title = block_text.replace("\n", " ").strip()
             else:
                 text_parts.append(block_text)
                 
-                # Detect bullet points (lines starting with common markers)
                 for line in block_text.split("\n"):
                     line = line.strip()
                     if line and self._is_bullet(line):

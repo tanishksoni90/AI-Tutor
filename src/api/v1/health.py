@@ -70,10 +70,10 @@ async def detailed_health(db: AsyncSession = Depends(get_db)):
             "response_time_ms": "< 100"
         }
     except Exception as e:
-        logger.error(f"PostgreSQL health check failed: {str(e)}")
+        logger.exception("PostgreSQL health check failed")
         health_status["dependencies"]["postgresql"] = {
             "status": "unhealthy",
-            "error": str(e)
+            "error": "connection failed"
         }
         overall_healthy = False
     
@@ -86,10 +86,10 @@ async def detailed_health(db: AsyncSession = Depends(get_db)):
             "collections_count": len(collections.collections)
         }
     except Exception as e:
-        logger.error(f"Qdrant health check failed: {str(e)}")
+        logger.exception("Qdrant health check failed")
         health_status["dependencies"]["qdrant"] = {
             "status": "unhealthy",
-            "error": str(e)
+            "error": "unavailable"
         }
         overall_healthy = False
     
@@ -135,10 +135,10 @@ async def readiness_probe(db: AsyncSession = Depends(get_db)):
         
         return {"status": "ready"}
     except Exception as e:
-        logger.error(f"Readiness check failed: {str(e)}")
+        logger.exception("Readiness check failed")
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not_ready", "error": str(e)}
+            content={"status": "not_ready", "error": "service unavailable"}
         )
 
 

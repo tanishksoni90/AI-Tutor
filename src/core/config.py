@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from typing import Set
 
 class Settings(BaseSettings):
     PROJECT_NAME: str
@@ -26,7 +27,10 @@ class Settings(BaseSettings):
     # JWT Authentication
     JWT_SECRET_KEY: str = "your-secret-key-change-in-production"  # i can use CryptContext(schemes=["bcrypt"], deprecated="auto").token_urlsafe(32)
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    
+    # Security - PII hashing salt (MUST be set in production, never commit to repo)
+    PII_SALT: str = "change-this-salt-in-production"
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
@@ -37,6 +41,17 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore"
     )
+
+
+# Centralized trusted proxy configuration
+# Configure based on your infrastructure (load balancers, reverse proxies)
+TRUSTED_PROXIES: Set[str] = {
+    "127.0.0.1",
+    "::1",
+    # Add your load balancer/proxy IPs here:
+    # "10.0.0.1",
+    # "172.16.0.1",
+}
 
 @lru_cache
 def get_settings() -> Settings:

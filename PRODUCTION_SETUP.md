@@ -40,6 +40,8 @@ poetry run python scripts/test_production_features.py
      - Auth: 5/min
    - Returns `429 Too Many Requests` with retry-after
    - Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`
+   
+   ⚠️ **Production Warning**: The current implementation uses in-memory storage (see `RateLimiter` class in `src/middleware/rate_limiting.py`) which is **single-instance only**. For multi-instance or high-availability production deployments, switch to a Redis-backed rate limiter to share state across instances. The in-memory approach will not enforce limits correctly when running multiple server instances behind a load balancer.
 
 2. **Error Handling** ([src/middleware/error_handling.py](src/middleware/error_handling.py))
    - Structured error responses
@@ -120,7 +122,10 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 
 # Security (CHANGE IN PRODUCTION!)
-JWT_SECRET_KEY=your-secret-key-change-in-production
+# Generate a secure key: openssl rand -hex 32
+# Or use a secret manager (AWS Secrets Manager, HashiCorp Vault, etc.)
+# NEVER commit real secrets to the repository!
+JWT_SECRET_KEY=<generate-a-secure-key-or-read-from-secret-store>
 
 # Environment
 ENV_MODE=dev  # or 'prod'
