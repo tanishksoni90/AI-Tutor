@@ -16,7 +16,18 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
-import google.generativeai as genai
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 from src.core.config import settings
 
@@ -74,6 +85,9 @@ class GeminiEmbeddingService(EmbeddingService):
         batch_size: int = 100,
         requests_per_minute: int = 1500
     ):
+        if not GENAI_AVAILABLE:
+            raise ImportError("google-generativeai not installed. Run: pip install google-generativeai")
+        
         self._api_key = api_key or settings.GEMINI_API_KEY
         self._model = model or settings.EMBEDDING_MODEL
         self._dimensions = dimensions or settings.EMBEDDING_DIM
@@ -129,6 +143,11 @@ class GeminiEmbeddingService(EmbeddingService):
         """
         if not texts:
             return []
+        
+        # Validate all texts - reject empty/whitespace-only strings (consistent with embed_text)
+        for i, text in enumerate(texts):
+            if not text or not text.strip():
+                raise ValueError(f"Cannot embed empty text at index {i}")
         
         results = []
         total = len(texts)
@@ -188,7 +207,113 @@ class GeminiEmbeddingService(EmbeddingService):
             return results
 
 
+class LocalEmbeddingService(EmbeddingService):
+    """
+    Local embedding implementation using sentence-transformers.
+    
+    Features:
+    - E5-large-v2 model (1024 dimensions)
+    - Runs locally without API calls
+    - Good for development/testing
+    """
+    
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        batch_size: int = 32
+    ):
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")
+        
+        self._model_name = model or settings.LOCAL_EMBEDDING_MODEL
+        self._batch_size = batch_size
+        self._dimensions = settings.LOCAL_EMBEDDING_DIM
+        
+        logger.info(f"Loading local embedding model: {self._model_name}...")
+        self._model = SentenceTransformer(self._model_name)
+        logger.info(f"Local model loaded: dims={self._dimensions}")
+    
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+    
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+    
+    async def embed_text(self, text: str) -> EmbeddingResult:
+        """Generate embedding for a single text."""
+        if not text or not text.strip():
+            raise ValueError("Cannot embed empty text")
+        
+        try:
+            # Run model inference in thread pool to avoid blocking
+            vector = await asyncio.to_thread(
+                self._model.encode,
+                text,
+                normalize_embeddings=True
+            )
+            
+            return EmbeddingResult(
+                text=text,
+                vector=vector.tolist(),
+                model=self._model_name,
+                dimensions=len(vector)
+            )
+        
+        except Exception as e:
+            logger.error(f"Local embedding failed: {str(e)}")
+            raise
+    
+    async def embed_batch(self, texts: List[str]) -> List[EmbeddingResult]:
+        """Generate embeddings for multiple texts."""
+        if not texts:
+            return []
+        
+        # Validate all texts - reject empty/whitespace-only strings (consistent with embed_text)
+        for i, text in enumerate(texts):
+            if not text or not text.strip():
+                raise ValueError(f"Cannot embed empty text at index {i}")
+        
+        try:
+            # Batch encode in thread pool
+            vectors = await asyncio.to_thread(
+                self._model.encode,
+                texts,
+                batch_size=self._batch_size,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
+            
+            return [
+                EmbeddingResult(
+                    text=text,
+                    vector=vector.tolist(),
+                    model=self._model_name,
+                    dimensions=len(vector)
+                )
+                for text, vector in zip(texts, vectors)
+            ]
+        
+        except Exception as e:
+            logger.error(f"Batch local embedding failed: {str(e)}")
+            raise
+
+
 # Factory function for dependency injection
 def get_embedding_service() -> EmbeddingService:
-    """Get the configured embedding service."""
-    return GeminiEmbeddingService()
+    """
+    Get the configured embedding service.
+    
+    Auto-selects:
+    - LocalEmbeddingService (E5-large-v2) if GEMINI_API_KEY is empty or USE_LOCAL_EMBEDDINGS=True
+    - GeminiEmbeddingService otherwise
+    """
+    use_local = settings.USE_LOCAL_EMBEDDINGS or not settings.GEMINI_API_KEY
+    
+    if use_local:
+        logger.info("Using local embedding model (E5-large-v2) for development")
+        return LocalEmbeddingService()
+    else:
+        logger.info("Using Gemini embedding model for production")
+        return GeminiEmbeddingService()

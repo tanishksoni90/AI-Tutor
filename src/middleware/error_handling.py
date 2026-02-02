@@ -151,6 +151,10 @@ def create_http_exception_handler(app):
         from src.middleware.error_handling import create_http_exception_handler
         create_http_exception_handler(app)
     """
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    
+    # Register FastAPI HTTPException handler FIRST so it catches structured exceptions
+    # (CourseNotFoundError, EnrollmentRequiredError, etc.) before the Starlette handler
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
@@ -173,6 +177,18 @@ def create_http_exception_handler(app):
             error_code=f"HTTP_{exc.status_code}",
             message=message,
             details=details
+        )
+    
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
+        """Handle Starlette HTTPException (includes 404s for non-existent routes)."""
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        
+        return _create_error_response(
+            request_id=request_id,
+            status_code=exc.status_code,
+            error_code=f"HTTP_{exc.status_code}",
+            message=exc.detail if exc.detail else f"HTTP {exc.status_code}",
         )
     
     @app.exception_handler(Exception)

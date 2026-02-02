@@ -1,10 +1,44 @@
 import enum
 import uuid
-from sqlalchemy import Column, String, ForeignKey, DateTime, Text, Boolean, Integer, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, ForeignKey, DateTime, Text, Boolean, Integer, Enum as SAEnum, TypeDecorator, CHAR
+from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from src.db.base import Base
+
+
+# Cross-database UUID type
+class UUID(TypeDecorator):
+    """Platform-independent UUID type.
+    Uses PostgreSQL's UUID type when available, otherwise uses CHAR(36).
+    """
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(PostgreSQLUUID())
+        else:
+            return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == 'postgresql':
+            return value
+        else:
+            if isinstance(value, uuid.UUID):
+                return str(value)
+            return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            if isinstance(value, uuid.UUID):
+                return value
+            else:
+                return uuid.UUID(value)
 
 class ContentType(str, enum.Enum):
     SLIDE = "slide"
@@ -16,7 +50,7 @@ class ContentType(str, enum.Enum):
 class Org(Base):
     __tablename__ = "orgs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     courses = relationship("Course", back_populates="org")
@@ -30,8 +64,8 @@ class CourseType(str, enum.Enum):
 class Course(Base):
     __tablename__ = "courses"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id = Column(UUID(as_uuid=True), ForeignKey("orgs.id"), nullable=False)
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(), ForeignKey("orgs.id"), nullable=False)
     name = Column(String, nullable=False)
     course_type = Column(String, default=CourseType.STANDARD.value, nullable=False)
     total_sessions = Column(Integer, default=0, nullable=False)  # Updated during ingestion
@@ -51,8 +85,8 @@ class StudentRole(str, enum.Enum):
 class Student(Base):
     __tablename__ = "students"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id = Column(UUID(as_uuid=True), ForeignKey("orgs.id"), nullable=False)
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(), ForeignKey("orgs.id"), nullable=False)
     email = Column(String, unique=True, nullable=False)
     full_name = Column(String, nullable=True)
     hashed_password = Column(String, nullable=False)
@@ -67,9 +101,9 @@ class Enrollment(Base):
     """Links a Student to a Course"""
     __tablename__ = "enrollments"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(), ForeignKey("students.id"), nullable=False)
+    course_id = Column(UUID(), ForeignKey("courses.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     student = relationship("Student", back_populates="enrollments")
@@ -82,8 +116,8 @@ class Document(Base):
     """
     __tablename__ = "documents"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    course_id = Column(UUID(), ForeignKey("courses.id"), nullable=False)
     title = Column(String, nullable=False)
     session_id = Column(String, nullable=True) # Logical grouping (e.g., "Week 1")
     content_type = Column(String, nullable=False) # Stored as string for flexibility, validated by logic
@@ -102,9 +136,9 @@ class DocumentChunk(Base):
     """
     __tablename__ = "document_chunks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False) # Denormalized for fast filtering
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    document_id = Column(UUID(), ForeignKey("documents.id"), nullable=False)
+    course_id = Column(UUID(), ForeignKey("courses.id"), nullable=False) # Denormalized for fast filtering
     
     # RAG Metadata
     session_id = Column(String, nullable=True) # Denormalized from Document
@@ -117,9 +151,48 @@ class DocumentChunk(Base):
     slide_title = Column(String, nullable=True)    # Extracted slide title for context
     
     # Link to Vector DB
-    embedding_id = Column(UUID(as_uuid=True), nullable=True) # The ID used in Qdrant
+    embedding_id = Column(UUID(), nullable=True) # The ID used in Qdrant
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("Document", back_populates="chunks")
     course = relationship("Course", back_populates="chunks")
+
+
+class QueryAnalytics(Base):
+    """
+    Long-term analytics storage for query patterns and insights.
+    Stores metadata only - NOT full conversation text.
+    Used for: Admin dashboards, course improvement, identifying struggling topics.
+    """
+    __tablename__ = "query_analytics"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    
+    # Context
+    student_id = Column(UUID(), ForeignKey("students.id"), nullable=True)  # Optional for privacy
+    course_id = Column(UUID(), ForeignKey("courses.id"), nullable=False)
+    session_token = Column(String(64), nullable=True)  # Anonymous session tracking
+    
+    # Query metadata (NOT the actual question text for privacy)
+    query_topic = Column(String(255), nullable=True)  # AI-extracted topic category
+    query_length = Column(Integer, nullable=False)  # Character count of question
+    
+    # Response metadata
+    response_length = Column(Integer, nullable=False)  # Character count of response
+    confidence_score = Column(Integer, nullable=True)  # 0-100 confidence
+    sources_count = Column(Integer, default=0, nullable=False)  # Number of sources used
+    sources_used = Column(Text, nullable=True)  # JSON: [{"slide": 24, "doc": "title"}]
+    
+    # Quality indicators
+    was_hallucination_detected = Column(Boolean, default=False, nullable=False)
+    was_assignment_blocked = Column(Boolean, default=False, nullable=False)
+    context_messages_count = Column(Integer, default=0, nullable=False)  # Follow-up depth
+    
+    # Timing
+    response_time_ms = Column(Integer, nullable=True)  # Latency tracking
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    student = relationship("Student", backref="query_analytics")
+    course = relationship("Course", backref="query_analytics")

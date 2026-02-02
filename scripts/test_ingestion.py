@@ -14,7 +14,7 @@ import uuid
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.db.session import AsyncSessionLocal
+from src.db.session import AsyncSessionLocal, engine
 from src.db.models import Org, Course
 from src.db.repository.org import OrgRepository
 from src.db.repository.course import CourseRepository
@@ -28,27 +28,20 @@ async def main(pdf_path: str):
         print(f"ERROR: File not found: {pdf_path}")
         return
     
+    # Use pre-created test org and course (created via SQL script)
+    test_org_id = uuid.UUID('00000000-0000-0000-0000-000000000001')
+    test_course_id = uuid.UUID('00000000-0000-0000-0000-000000000002')
+    
+    print(f"\nUsing pre-created test data:")
+    print(f"  Org ID: {test_org_id}")
+    print(f"  Course ID: {test_course_id}")
+    
     async with AsyncSessionLocal() as session:
-        # Setup: Create test org and course
-        org_repo = OrgRepository(Org, session)
-        course_repo = CourseRepository(Course, session)
-        
-        print("\n1. Creating test org...")
-        org = await org_repo.create({"name": "Test University"})
-        print(f"   Created org: {org.id}")
-        
-        print("\n2. Creating test course...")
-        course = await course_repo.create({
-            "name": "CS101: Introduction to AI",
-            "org_id": org.id
-        })
-        print(f"   Created course: {course.id}")
-        
-        print("\n3. Running ingestion...")
+        print("\n1. Running ingestion...")
         service = IngestionService(session)
         
         request = IngestionRequest(
-            course_id=course.id,
+            course_id=test_course_id,
             title="Week 1 Slides",
             source_uri=pdf_path,
             content_type="slide",
@@ -74,12 +67,15 @@ async def main(pdf_path: str):
             import traceback
             traceback.print_exc()
         
-        print("\n4. Testing idempotency (re-ingesting same file)...")
+        print("\n2. Testing idempotency (re-ingesting same file)...")
         try:
             metrics2 = await service.ingest(request)
             print(f"   Idempotency check: {metrics2.error}")
         except Exception as e:
             print(f"   ERROR: {str(e)}")
+    
+    # Cleanup database connections
+    await engine.dispose()
 
 
 if __name__ == "__main__":
