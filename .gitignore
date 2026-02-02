@@ -111,3 +111,7 @@ qdrant_data/
 *.pem
 *.key
 secrets/
+
+# Vite cache (build artifacts)
+.vite/
+*/.vite/

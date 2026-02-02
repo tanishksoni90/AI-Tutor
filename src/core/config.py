@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import model_validator
 from functools import lru_cache
 from typing import Set
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     ENV_MODE: str = "dev"
 
+    # PostgreSQL Database
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
@@ -16,13 +18,31 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION_NAME: str = "course_knowledge"
+    USE_QDRANT: bool = True  # Set to False to skip vector storage (dev mode)
     
-    # supports 768, 1536, 3072
-    EMBEDDING_MODEL: str = "gemini-embedding-001"
-    EMBEDDING_DIM: int = 1536  
+    # Embedding Configuration
+    # Production: Gemini (1536-dim), Development: E5-large-v2 (1024-dim)
+    USE_LOCAL_EMBEDDINGS: bool = False  # Auto-enabled if GEMINI_API_KEY is empty
     
-    # Gemini API
+    # Gemini settings (production)
+    EMBEDDING_MODEL: str = "gemini-embedding-001"  # supports 768, 1536, 3072
+    EMBEDDING_DIM: int = 1536
     GEMINI_API_KEY: str = ""
+    
+    @model_validator(mode='after')
+    def auto_enable_local_embeddings(self) -> 'Settings':
+        """Auto-enable USE_LOCAL_EMBEDDINGS if GEMINI_API_KEY is empty."""
+        if not self.GEMINI_API_KEY:
+            object.__setattr__(self, 'USE_LOCAL_EMBEDDINGS', True)
+        return self
+    
+    # Local model settings (development)
+    LOCAL_EMBEDDING_MODEL: str = "intfloat/e5-large-v2"
+    LOCAL_EMBEDDING_DIM: int = 1024
+    
+    # LLM for responses
+    LLM_MODEL: str = "gemini-2.0-flash-exp"  # Gemini 2.0 Flash for responses
+    LLM_TEMPERATURE: float = 0.3  # Lower for more factual responses
     
     # JWT Authentication
     JWT_SECRET_KEY: str = "your-secret-key-change-in-production"  # i can use CryptContext(schemes=["bcrypt"], deprecated="auto").token_urlsafe(32)
