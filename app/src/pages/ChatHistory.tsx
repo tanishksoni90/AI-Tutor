@@ -165,10 +165,16 @@ function ChatHistoryContent() {
   }, {} as Record<string, ChatHistoryItem[]>);
 
   const handleClearHistory = () => {
-    clearSessions();
-    toast.success('Chat history cleared', {
-      description: 'All your conversation history has been removed.'
-    });
+    const confirmed = window.confirm(
+      'Are you sure you want to clear all chat history?\n\nThis action is irreversible and all your conversation history will be permanently deleted.'
+    );
+    
+    if (confirmed) {
+      clearSessions();
+      toast.success('Chat history cleared', {
+        description: 'All your conversation history has been removed.'
+      });
+    }
   };
 
   if (isLoading) {

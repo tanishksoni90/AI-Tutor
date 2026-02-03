@@ -147,9 +147,12 @@ export function Login() {
           <div className="mt-6 text-center text-sm text-gray-500">
             <p>
               Don't have an account?{' '}
-              <span className="text-primary hover:underline cursor-pointer">
+              <a 
+                href="mailto:admin@adda247.com" 
+                className="text-primary hover:underline"
+              >
                 Contact your admin
-              </span>
+              </a>
             </p>
           </div>
         </div>
