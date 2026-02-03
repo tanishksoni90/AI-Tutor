@@ -144,17 +144,17 @@ function AdminOverviewContent() {
       setStats(data);
     } catch (error) {
       console.error('Failed to load stats:', error);
-      // Use mock data for demo
+      // Set empty stats on error
       setStats({
-        total_users: 156,
-        total_admins: 4,
-        total_students: 152,
-        total_courses: 12,
-        total_documents: 89,
-        total_chunks: 4532,
-        total_queries: 8945,
-        queries_today: 234,
-        active_users_today: 45
+        total_users: 0,
+        total_admins: 0,
+        total_students: 0,
+        total_courses: 0,
+        total_documents: 0,
+        total_chunks: 0,
+        total_queries: 0,
+        queries_today: 0,
+        active_users_today: 0
       });
     } finally {
       setIsLoading(false);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate, Link } from 'react-router-dom';
 import {
@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { useAuthStore } from '@/store/authStore';
+import { useChatStore } from '@/store/chatStore';
 import { api } from '@/lib/api';
 
 interface Course {
@@ -26,14 +27,6 @@ interface Course {
   progress?: number;
   last_activity?: string;
   sessions: { session_id: string; title: string; document_count: number }[];
-}
-
-interface ChatHistory {
-  id: string;
-  course_id: string;
-  course_name: string;
-  preview: string;
-  timestamp: string;
 }
 
 function CourseCard({ course }: { course: Course }) {
@@ -145,19 +138,52 @@ function StatCard({
 
 function DashboardContent() {
   const { user } = useAuthStore();
+  const { sessions } = useChatStore();
   const [courses, setCourses] = useState<Course[]>([]);
-  const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [stats, setStats] = useState({
+    questionsAsked: 0,
+    activeSessions: 0,
+    studyStreak: 0,
+  });
+
+  // Build recent conversations from chat store
+  const recentConversations = useMemo(() => {
+    return sessions
+      .filter(s => s.messages.length > 0)
+      .map(session => {
+        const firstUserMessage = session.messages.find(m => m.type === 'user');
+        const course = courses.find(c => c.id === session.course_id);
+        return {
+          id: session.id,
+          course_id: session.course_id,
+          course_name: course?.name || 'Unknown Course',
+          preview: firstUserMessage?.content || 'No messages',
+          timestamp: session.updated_at?.toString() || session.created_at.toString(),
+        };
+      })
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 3); // Show only 3 recent conversations
+  }, [sessions, courses]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [coursesData, historyData] = await Promise.all([
+        // Load courses and stats in parallel
+        const [coursesData, statsData] = await Promise.all([
           api.getEnrolledCourses(),
-          api.getChatHistory(),
+          api.getMyStats().catch(() => ({ 
+            questions_asked: 0, 
+            unique_sessions: 0, 
+            study_streak_days: 0 
+          })),
         ]);
         setCourses(coursesData);
-        setChatHistory(historyData);
+        setStats({
+          questionsAsked: statsData.questions_asked,
+          activeSessions: statsData.unique_sessions,
+          studyStreak: statsData.study_streak_days,
+        });
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
       } finally {
@@ -207,20 +233,19 @@ function DashboardContent() {
         />
         <StatCard
           title="Questions Asked"
-          value="24"
+          value={stats.questionsAsked.toString()}
           icon={MessageSquare}
-          trend="+12% this week"
         />
         <StatCard
-          title="Total Sessions"
-          value={courses.reduce((acc, c) => acc + c.total_sessions, 0).toString()}
+          title="Chat Sessions"
+          value={stats.activeSessions.toString()}
           icon={BookOpen}
         />
         <StatCard
           title="Study Streak"
-          value="5 days"
+          value={`${stats.studyStreak} day${stats.studyStreak !== 1 ? 's' : ''}`}
           icon={Clock}
-          trend="Keep it up!"
+          trend={stats.studyStreak > 1 ? "Keep it up!" : undefined}
         />
       </motion.div>
 
@@ -266,7 +291,7 @@ function DashboardContent() {
         
         <Card className="border-border/50">
           <CardContent className="p-0">
-            {chatHistory.length === 0 ? (
+            {recentConversations.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground">
                 <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
                 <p>No conversations yet</p>
@@ -274,10 +299,11 @@ function DashboardContent() {
               </div>
             ) : (
               <div className="divide-y divide-border/50">
-                {chatHistory.map((chat) => (
-                  <div
+                {recentConversations.map((chat) => (
+                  <Link
                     key={chat.id}
-                    className="flex items-center justify-between p-4 hover:bg-secondary/50 transition-colors cursor-pointer"
+                    to={`/chat/${chat.course_id}`}
+                    className="flex items-center justify-between p-4 hover:bg-secondary/50 transition-colors cursor-pointer block"
                   >
                     <div className="flex-1 min-w-0">
                       <p className="font-medium truncate">{chat.preview}</p>
@@ -286,7 +312,7 @@ function DashboardContent() {
                       </p>
                     </div>
                     <ArrowRight className="w-5 h-5 text-muted-foreground" />
-                  </div>
+                  </Link>
                 ))}
               </div>
             )}

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { GraduationCap, Eye, EyeOff, Loader2, ArrowLeft, AlertCircle } from 'lucide-react';
+import { GraduationCap, Eye, EyeOff, Loader2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,39 +9,19 @@ import { useAuthStore } from '@/store/authStore';
 
 export function Login() {
   const navigate = useNavigate();
-  const { login, isLoading, error, clearError, isAuthenticated, user } = useAuthStore();
+  const { login, isLoading, error, clearError } = useAuthStore();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // If already authenticated as student, redirect to dashboard
-    if (isAuthenticated && user?.role === 'student') {
-      navigate('/dashboard');
-    }
-    // If authenticated as admin, redirect to admin portal
-    if (isAuthenticated && user?.role === 'admin') {
-      navigate('/admin');
-    }
-  }, [isAuthenticated, user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     clearError();
-    setLocalError(null);
     
     try {
       await login(email, password);
-      // After login, check user role and redirect appropriately
-      const { user: loggedInUser } = useAuthStore.getState();
-      if (loggedInUser?.role === 'admin') {
-        // Admin tried to login via student portal - redirect to admin
-        navigate('/admin');
-      } else {
-        navigate('/dashboard');
-      }
+      navigate('/dashboard');
     } catch {
       // Error is handled by the store
     }
@@ -79,7 +59,7 @@ export function Login() {
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary mb-4">
               <GraduationCap className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Student Portal</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Welcome back</h1>
             <p className="text-gray-500">
               Sign in to access your AI Tutor
             </p>
@@ -127,14 +107,13 @@ export function Login() {
             </div>
 
             {/* Error message */}
-            {(error || localError) && (
+            {error && (
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm flex items-start gap-2"
+                className="p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm"
               >
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                {localError || error}
+                {error}
               </motion.div>
             )}
 
@@ -159,17 +138,20 @@ export function Login() {
           <div className="mt-6 p-4 rounded-lg bg-gray-50 border border-gray-100">
             <p className="text-sm text-gray-500 mb-2">Demo credentials:</p>
             <div className="text-sm space-y-1">
-              <p><span className="text-gray-500">Email:</span> <span className="font-mono text-gray-700">student@career247.com</span></p>
-              <p><span className="text-gray-500">Password:</span> <span className="font-mono text-gray-700">student123</span></p>
+              <p><span className="text-gray-500">Email:</span> <span className="font-mono text-gray-700">test@example.com</span></p>
+              <p><span className="text-gray-500">Password:</span> <span className="font-mono text-gray-700">testpass123</span></p>
             </div>
           </div>
 
           {/* Footer */}
           <div className="mt-6 text-center text-sm text-gray-500">
             <p>
-              Administrator?{' '}
-              <a href="/admin/login" className="text-primary hover:underline cursor-pointer font-medium">
-                Admin Login
+              Don't have an account?{' '}
+              <a 
+                href="mailto:admin@adda247.com" 
+                className="text-primary hover:underline"
+              >
+                Contact your admin
               </a>
             </p>
           </div>
@@ -178,7 +160,7 @@ export function Login() {
         {/* Brand */}
         <div className="mt-8 text-center">
           <p className="text-sm text-gray-400">
-            © {new Date().getFullYear()} AI Tutor by Career247
+            © {new Date().getFullYear()} AI Tutor by Adda247
           </p>
         </div>
       </motion.div>

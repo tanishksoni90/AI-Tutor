@@ -89,13 +89,7 @@ function AdminCoursesContent() {
       setCourses(data);
     } catch (error) {
       console.error('Failed to load courses:', error);
-      // Mock data
-      setCourses([
-        { id: '1', name: 'Data Structures & Algorithms', org_id: '1', course_type: 'standard', total_sessions: 12, total_chunks: 450, documents_count: 24, enrollments_count: 89, created_at: '2026-01-10T10:00:00Z' },
-        { id: '2', name: 'Machine Learning Fundamentals', org_id: '1', course_type: 'certification', total_sessions: 16, total_chunks: 680, documents_count: 36, enrollments_count: 156, created_at: '2026-01-05T14:30:00Z' },
-        { id: '3', name: 'Web Development Bootcamp', org_id: '1', course_type: 'micro', total_sessions: 8, total_chunks: 280, documents_count: 16, enrollments_count: 45, created_at: '2026-01-20T09:15:00Z' },
-        { id: '4', name: 'Python Programming Basics', org_id: '1', course_type: 'micro', total_sessions: 6, total_chunks: 180, documents_count: 12, enrollments_count: 234, created_at: '2026-01-15T16:45:00Z' },
-      ]);
+      setCourses([]);
     } finally {
       setIsLoading(false);
     }

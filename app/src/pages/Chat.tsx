@@ -256,6 +256,7 @@ function ChatContent() {
   const { courseId } = useParams<{ courseId: string }>();
   const [inputValue, setInputValue] = useState('');
   const [sessionFilter, setSessionFilter] = useState<string>('');
+  const [responseMode, setResponseMode] = useState<'strict' | 'enhanced'>('enhanced');
   const [course, setCourse] = useState(defaultCourse);
   const [courseLoading, setCourseLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -288,6 +289,7 @@ function ChatContent() {
   }, [courseId]);
 
   // Get or create session for this course
+  // Re-run when sessions changes to keep currentSession in sync
   useEffect(() => {
     if (courseId) {
       const existingSession = sessions.find((s) => s.course_id === courseId);
@@ -297,7 +299,7 @@ function ChatContent() {
         createSession(courseId);
       }
     }
-  }, [courseId]);
+  }, [courseId, sessions]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -310,7 +312,7 @@ function ChatContent() {
   const handleSend = async () => {
     if (!inputValue.trim() || !courseId) return;
     
-    await sendMessage(courseId, inputValue, sessionFilter || undefined);
+    await sendMessage(courseId, inputValue, sessionFilter || undefined, responseMode);
     setInputValue('');
   };
 
@@ -365,6 +367,33 @@ function ChatContent() {
                 </option>
               ))}
             </select>
+            
+            {/* Response Mode Toggle */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary border border-border/50">
+              <span className="text-xs text-muted-foreground">Mode:</span>
+              <button
+                onClick={() => setResponseMode('strict')}
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                  responseMode === 'strict'
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title="Answers only from course material - no elaboration"
+              >
+                Strict
+              </button>
+              <button
+                onClick={() => setResponseMode('enhanced')}
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                  responseMode === 'enhanced'
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title="AI can elaborate and explain in more detail"
+              >
+                Enhanced
+              </button>
+            </div>
             
             <Button variant="outline" size="sm">
               <Sparkles className="w-4 h-4 mr-2" />

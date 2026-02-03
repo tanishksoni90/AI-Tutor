@@ -90,14 +90,7 @@ function AdminDocumentsContent() {
       setDocuments(data);
     } catch (error) {
       console.error('Failed to load documents:', error);
-      // Mock data
-      setDocuments([
-        { id: '1', course_id: '1', course_name: 'Data Structures & Algorithms', title: 'Week 1 - Introduction', session_id: 'Week 1', content_type: 'slide', source_uri: '/docs/dsa-week1.pdf', chunks_count: 24, created_at: '2026-01-15T10:00:00Z' },
-        { id: '2', course_id: '1', course_name: 'Data Structures & Algorithms', title: 'Week 2 - Arrays', session_id: 'Week 2', content_type: 'slide', source_uri: '/docs/dsa-week2.pdf', chunks_count: 32, created_at: '2026-01-16T14:30:00Z' },
-        { id: '3', course_id: '2', course_name: 'Machine Learning Fundamentals', title: 'Module 1 Pre-read', session_id: 'Module 1', content_type: 'pre_read', source_uri: '/docs/ml-preread.pdf', chunks_count: 18, created_at: '2026-01-17T09:15:00Z' },
-        { id: '4', course_id: '2', course_name: 'Machine Learning Fundamentals', title: 'Module 1 Quiz', session_id: 'Module 1', content_type: 'quiz', source_uri: '/docs/ml-quiz1.pdf', chunks_count: 12, created_at: '2026-01-18T16:45:00Z' },
-        { id: '5', course_id: '3', course_name: 'Web Development Bootcamp', title: 'HTML & CSS Transcript', session_id: 'Session 1', content_type: 'transcript', source_uri: '/docs/web-transcript.pdf', chunks_count: 45, created_at: '2026-01-20T11:00:00Z' },
-      ]);
+      setDocuments([]);
     } finally {
       setIsLoading(false);
     }
