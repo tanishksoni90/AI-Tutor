@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -15,6 +15,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
+import { useChatStore } from '@/store/chatStore';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
@@ -24,7 +25,7 @@ interface ChatHistoryItem {
   course_name: string;
   preview: string;
   timestamp: string;
-  message_count?: number;
+  message_count: number;
 }
 
 function formatDate(dateString: string) {
@@ -102,23 +103,53 @@ function ChatHistoryCard({ item, index }: { item: ChatHistoryItem; index: number
 }
 
 function ChatHistoryContent() {
+  const { sessions, clearSessions } = useChatStore();
   const [history, setHistory] = useState<ChatHistoryItem[]>([]);
+  const [courseNames, setCourseNames] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Load course names for the sessions
   useEffect(() => {
-    const loadHistory = async () => {
+    const loadCourseNames = async () => {
+      setIsLoading(true);
       try {
-        const historyData = await api.getChatHistory();
-        setHistory(historyData);
+        // Get enrolled courses to map course_id -> name
+        const courses = await api.getEnrolledCourses();
+        const nameMap: Record<string, string> = {};
+        courses.forEach((course: any) => {
+          nameMap[course.id] = course.name;
+        });
+        setCourseNames(nameMap);
       } catch (error) {
-        console.error('Failed to load chat history:', error);
+        console.error('Failed to load course names:', error);
       } finally {
         setIsLoading(false);
       }
     };
-    loadHistory();
+    loadCourseNames();
   }, []);
+
+  // Convert chat store sessions to history items
+  useEffect(() => {
+    const historyItems: ChatHistoryItem[] = sessions
+      .filter(session => session.messages.length > 0) // Only sessions with messages
+      .map(session => {
+        // Find first user message as preview
+        const firstUserMessage = session.messages.find(m => m.type === 'user');
+        return {
+          id: session.id,
+          course_id: session.course_id,
+          course_name: courseNames[session.course_id] || 'Unknown Course',
+          preview: firstUserMessage?.content || 'No messages',
+          timestamp: session.updated_at?.toString() || session.created_at.toString(),
+          message_count: session.messages.length,
+        };
+      })
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    
+    setHistory(historyItems);
+  }, [sessions, courseNames]);
 
   const filteredHistory = history.filter((item) =>
     item.preview.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -134,8 +165,9 @@ function ChatHistoryContent() {
   }, {} as Record<string, ChatHistoryItem[]>);
 
   const handleClearHistory = () => {
-    toast.info('Chat history will be cleared on session end', {
-      description: 'Your conversations are stored temporarily in your browser.'
+    clearSessions();
+    toast.success('Chat history cleared', {
+      description: 'All your conversation history has been removed.'
     });
   };
 

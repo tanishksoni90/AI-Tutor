@@ -36,7 +36,7 @@ interface ChatState {
   // Actions
   createSession: (courseId: string) => string;
   addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
-  sendMessage: (courseId: string, question: string, sessionFilter?: string) => Promise<void>;
+  sendMessage: (courseId: string, question: string, sessionFilter?: string, responseMode?: 'strict' | 'enhanced') => Promise<void>;
   setCurrentSession: (session: ChatSession | null) => void;
   clearSessions: () => void;
   clearSessionMessages: (courseId: string) => void;
@@ -106,26 +106,27 @@ export const useChatStore = create<ChatState>()(
         }));
       },
 
-      sendMessage: async (courseId: string, question: string, sessionFilter?: string) => {
-        const state = get();
-        let session = state.getSessionByCourseId(courseId);
+      sendMessage: async (courseId: string, question: string, sessionFilter?: string, responseMode: 'strict' | 'enhanced' = 'enhanced') => {
+        let session = get().getSessionByCourseId(courseId);
         
         if (!session) {
-          const sessionId = state.createSession(courseId);
-          session = state.sessions.find((s) => s.id === sessionId);
+          const sessionId = get().createSession(courseId);
+          // Need to get fresh state after createSession updates the store
+          session = get().sessions.find((s) => s.id === sessionId);
         }
 
         if (!session) return;
 
         // Add user message
-        state.addMessage(session.id, {
+        get().addMessage(session.id, {
           type: 'user',
           content: question,
         });
 
         // Get context messages for follow-up support (short-term memory)
-        const contextMessages = state.getContextMessages(courseId);
-        const sessionToken = state.getSessionToken(courseId);
+        // Use fresh state to ensure we have the latest messages
+        const contextMessages = get().getContextMessages(courseId);
+        const sessionToken = get().getSessionToken(courseId);
 
         // Add loading message
         const loadingId = generateId();
@@ -162,6 +163,8 @@ export const useChatStore = create<ChatState>()(
             context_messages: contextMessages.length > 0 ? contextMessages : undefined,
             // Pass session token for analytics grouping
             session_token: sessionToken,
+            // Pass response mode (strict = context-only, enhanced = AI elaborates)
+            response_mode: responseMode,
           });
 
           // Replace loading message with actual response

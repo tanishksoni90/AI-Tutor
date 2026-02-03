@@ -64,6 +64,9 @@ export interface AskRequest {
   
   // Anonymous session tracking (for analytics, not for storing conversations)
   session_token?: string;
+  
+  // Response mode: "strict" = context-only, "enhanced" = AI elaborates
+  response_mode?: 'strict' | 'enhanced';
 }
 
 export interface SourceReference {

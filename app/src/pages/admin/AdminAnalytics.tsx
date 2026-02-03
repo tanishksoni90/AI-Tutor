@@ -128,34 +128,20 @@ function AdminAnalyticsContent() {
 
   const loadAnalytics = async () => {
     try {
-      const data = await api.getAdminAnalytics({ days: parseInt(timeRange) });
+      const data = await api.getAdminAnalytics();
       setAnalytics(data);
     } catch (error) {
       console.error('Failed to load analytics:', error);
-      // Mock data
+      // Set empty analytics on error
       setAnalytics({
-        total_queries: 8945,
-        queries_today: 234,
-        avg_confidence: 87.5,
-        hallucinations_detected: 12,
-        assignments_blocked: 45,
-        avg_response_time_ms: 1250,
-        popular_topics: [
-          { topic: 'Binary Search', count: 156 },
-          { topic: 'Data Structures', count: 134 },
-          { topic: 'Machine Learning', count: 98 },
-          { topic: 'Neural Networks', count: 87 },
-          { topic: 'Recursion', count: 76 },
-        ],
-        daily_usage: [
-          { date: '2026-01-27', queries: 189 },
-          { date: '2026-01-28', queries: 245 },
-          { date: '2026-01-29', queries: 312 },
-          { date: '2026-01-30', queries: 278 },
-          { date: '2026-01-31', queries: 356 },
-          { date: '2026-02-01', queries: 298 },
-          { date: '2026-02-02', queries: 234 },
-        ]
+        total_queries: 0,
+        queries_today: 0,
+        avg_confidence: 0,
+        hallucinations_detected: 0,
+        assignments_blocked: 0,
+        avg_response_time_ms: 0,
+        popular_topics: [],
+        daily_usage: []
       });
     } finally {
       setIsLoading(false);

@@ -79,13 +79,7 @@ function AdminUsersContent() {
       setUsers(data);
     } catch (error) {
       console.error('Failed to load users:', error);
-      // Mock data for demo
-      setUsers([
-        { id: '1', email: 'admin@career247.com', full_name: 'Admin User', org_id: '1', role: 'admin', is_active: true, created_at: '2026-01-15T10:00:00Z', courses_count: 5 },
-        { id: '2', email: 'student@career247.com', full_name: 'Demo Student', org_id: '1', role: 'student', is_active: true, created_at: '2026-01-20T14:30:00Z', courses_count: 3 },
-        { id: '3', email: 'john.doe@example.com', full_name: 'John Doe', org_id: '1', role: 'student', is_active: true, created_at: '2026-01-25T09:15:00Z', courses_count: 2 },
-        { id: '4', email: 'jane.smith@example.com', full_name: 'Jane Smith', org_id: '1', role: 'student', is_active: false, created_at: '2026-01-28T16:45:00Z', courses_count: 1 },
-      ]);
+      setUsers([]);
     } finally {
       setIsLoading(false);
     }
