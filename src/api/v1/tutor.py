@@ -45,6 +45,13 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=10)
     enable_validation: bool = Field(default=True)  # Self-reflective validation
     
+    # Response mode: "strict" = context-only, "enhanced" = AI can elaborate
+    response_mode: str = Field(
+        default="enhanced",
+        pattern="^(strict|enhanced)$",
+        description="strict: answer only from sources, enhanced: AI elaborates with more detail"
+    )
+    
     # Short-term memory: Last few messages for follow-up context
     context_messages: Optional[List[ContextMessageInput]] = Field(
         default=None, 
@@ -162,7 +169,8 @@ async def ask_tutor(
             question=request.question,
             retrieval_result=retrieval_result,
             session_token=request.session_token,
-            context_messages=context_messages
+            context_messages=context_messages,
+            response_mode=request.response_mode  # Pass response mode to tutor
         )
         
         tutor_response = await tutor_service.respond(tutor_request)

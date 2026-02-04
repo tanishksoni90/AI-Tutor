@@ -40,33 +40,17 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
-def _truncate_password_to_bcrypt_limit(password: str) -> str:
-    """
-    Truncate password to bcrypt's 72-byte limit using byte-aware truncation.
-    
-    bcrypt only uses the first 72 bytes of a password. This function ensures
-    consistent truncation by operating on bytes rather than characters, which
-    is important for multi-byte characters (e.g., UTF-8 encoded text).
-    """
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) <= 72:
-        return password
-    # Truncate to 72 bytes and decode safely (ignore incomplete multi-byte chars)
-    truncated_bytes = password_bytes[:72]
-    return truncated_bytes.decode('utf-8', errors='ignore')
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    # bcrypt has a 72 byte limit, truncate if needed using byte-aware truncation
-    truncated_password = _truncate_password_to_bcrypt_limit(plain_password)
+    # bcrypt has a 72 byte limit, truncate if needed
+    truncated_password = plain_password[:72] if len(plain_password.encode('utf-8')) > 72 else plain_password
     return pwd_context.verify(truncated_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    # bcrypt has a 72 byte limit, truncate if needed using byte-aware truncation
-    truncated_password = _truncate_password_to_bcrypt_limit(password)
+    # bcrypt has a 72 byte limit, truncate if needed
+    truncated_password = password[:72] if len(password.encode('utf-8')) > 72 else password
     return pwd_context.hash(truncated_password)
 
 

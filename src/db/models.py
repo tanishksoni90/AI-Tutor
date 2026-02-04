@@ -161,38 +161,27 @@ class DocumentChunk(Base):
 
 class QueryAnalytics(Base):
     """
-    Long-term analytics storage for query patterns and insights.
-    Stores metadata only - NOT full conversation text.
-    Used for: Admin dashboards, course improvement, identifying struggling topics.
+    Analytics for tracking queries (no actual question/answer content stored).
+    Used for hybrid memory approach - stores metadata only.
     """
     __tablename__ = "query_analytics"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
-    
-    # Context
-    student_id = Column(UUID(), ForeignKey("students.id"), nullable=True)  # Optional for privacy
+    student_id = Column(UUID(), ForeignKey("students.id"), nullable=True)
     course_id = Column(UUID(), ForeignKey("courses.id"), nullable=False)
-    session_token = Column(String(64), nullable=True)  # Anonymous session tracking
-    
-    # Query metadata (NOT the actual question text for privacy)
-    query_topic = Column(String(255), nullable=True)  # AI-extracted topic category
-    query_length = Column(Integer, nullable=False)  # Character count of question
-    
-    # Response metadata
-    response_length = Column(Integer, nullable=False)  # Character count of response
-    confidence_score = Column(Integer, nullable=True)  # 0-100 confidence
-    sources_count = Column(Integer, default=0, nullable=False)  # Number of sources used
-    sources_used = Column(Text, nullable=True)  # JSON: [{"slide": 24, "doc": "title"}]
-    
-    # Quality indicators
+    session_token = Column(String(64), nullable=True)  # Groups queries in same session
+    query_topic = Column(String(255), nullable=True)  # Extracted topic (not the question)
+    query_length = Column(Integer, nullable=False)
+    response_length = Column(Integer, nullable=False)
+    confidence_score = Column(Integer, nullable=True)  # 0-100
+    sources_count = Column(Integer, default=0, nullable=False)
+    sources_used = Column(Text, nullable=True)  # JSON list of chunk IDs
     was_hallucination_detected = Column(Boolean, default=False, nullable=False)
     was_assignment_blocked = Column(Boolean, default=False, nullable=False)
-    context_messages_count = Column(Integer, default=0, nullable=False)  # Follow-up depth
-    
-    # Timing
-    response_time_ms = Column(Integer, nullable=True)  # Latency tracking
+    context_messages_count = Column(Integer, default=0, nullable=False)
+    response_time_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     # Relationships
-    student = relationship("Student", backref="query_analytics")
-    course = relationship("Course", backref="query_analytics")
+    student = relationship("Student")
+    course = relationship("Course")

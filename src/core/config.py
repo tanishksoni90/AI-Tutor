@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import model_validator
 from functools import lru_cache
 from typing import Set
 
@@ -7,8 +6,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str
     API_V1_STR: str = "/api/v1"
     ENV_MODE: str = "dev"
+    
+    # Testing mode - use SQLite instead of PostgreSQL
+    USE_SQLITE: bool = False
+    SQLITE_DB_PATH: str = "test_aitutor.db"
 
-    # PostgreSQL Database
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
@@ -29,13 +31,6 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 1536
     GEMINI_API_KEY: str = ""
     
-    @model_validator(mode='after')
-    def auto_enable_local_embeddings(self) -> 'Settings':
-        """Auto-enable USE_LOCAL_EMBEDDINGS if GEMINI_API_KEY is empty."""
-        if not self.GEMINI_API_KEY:
-            object.__setattr__(self, 'USE_LOCAL_EMBEDDINGS', True)
-        return self
-    
     # Local model settings (development)
     LOCAL_EMBEDDING_MODEL: str = "intfloat/e5-large-v2"
     LOCAL_EMBEDDING_DIM: int = 1024
@@ -54,6 +49,8 @@ class Settings(BaseSettings):
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
+        if self.USE_SQLITE:
+            return f"sqlite+aiosqlite:///{self.SQLITE_DB_PATH}"
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     model_config = SettingsConfigDict(

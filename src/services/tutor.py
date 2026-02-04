@@ -12,21 +12,15 @@ SELF-REFLECTIVE RAG (SelfReflectiveTutorService):
 6. Reduces hallucinations by ~40%
 7. Honest about knowledge gaps
 
-HYBRID MEMORY APPROACH:
-8. Short-term: Last 3-5 messages in session (in-memory, passed from frontend)
-9. Long-term: Query analytics stored for insights (no full conversation text)
-
 Design:
 - Prompt construction is explicit and auditable
 - LLM invocation is isolated
 - Response shaping enforces academic integrity
 """
-import asyncio
-import json
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from dataclasses import dataclass
+from typing import List, Optional
 from uuid import UUID
 
 import google.generativeai as genai
@@ -35,13 +29,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.db.models import DocumentChunk
 from src.db.repository.document import DocumentChunkRepository
-from src.db.repository.analytics import AnalyticsRepository
 from src.services.retrieval import RetrievalResult, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of context messages to use (short-term memory)
-MAX_CONTEXT_MESSAGES = 5
+
+@dataclass
+class ContextMessage:
+    """A message in the conversation context."""
+    role: str  # "user" or "assistant"
+    content: str
 
 
 # Validation prompt for self-reflective RAG
@@ -60,37 +57,43 @@ Respond with ONLY "YES" or "NO":
 Response:"""
 
 
-# System prompt enforcing tutor behavior
-TUTOR_SYSTEM_PROMPT = """You are an AI Teaching Assistant for an educational course. Your role is to help students UNDERSTAND concepts, not to provide direct answers.
+# System prompt enforcing tutor behavior - STRICT MODE (context-only)
+TUTOR_SYSTEM_PROMPT_STRICT = """You are an AI Teaching Assistant for an educational course. Your role is to help students UNDERSTAND concepts using ONLY the provided course material.
 
 STRICT RULES:
-1. EXPLAIN concepts using the provided course material only
-2. NEVER provide direct answers to assignment questions
-3. NEVER write code solutions or step-by-step problem solutions
-4. You MAY provide:
-   - Conceptual explanations
-   - Analogies and examples (different from assignments)
-   - Hints that guide thinking
-   - Clarifications of lecture content
-   - References to specific slides/sections
-5. If asked for a direct answer, politely redirect to understanding the concept
-6. If the question is outside the provided context, say "I can only help with topics covered in your course materials"
+1. Answer using ONLY the information in the provided course material
+2. Do NOT add information beyond what's in the material
+3. Reference specific slides/sections when answering
+4. If information is not in the material, say "This is not covered in the provided materials"
+5. NEVER provide direct answers to assignment questions
+6. NEVER write code solutions
+
+RESPONSE STYLE:
+- Be concise and factual
+- Quote or paraphrase from the course material directly
+- Always cite which slide/session the information comes from
+- Do not elaborate beyond the source content"""
+
+
+# System prompt enforcing tutor behavior - ENHANCED MODE (AI elaborates)
+TUTOR_SYSTEM_PROMPT_ENHANCED = """You are an AI Teaching Assistant for an educational course. Your role is to help students UNDERSTAND concepts deeply.
+
+RULES:
+1. Use the provided course material as your primary source
+2. You MAY elaborate, add examples, and explain in more detail to help understanding
+3. You MAY use your knowledge to provide better explanations and analogies
+4. Reference specific slides when information comes directly from course material
+5. NEVER provide direct answers to assignment questions
+6. NEVER write code solutions or step-by-step problem solutions
+7. If asked for a direct answer, politely redirect to understanding the concept
 
 RESPONSE STYLE:
 - Be encouraging and supportive
-- Use clear, simple language
-- Reference specific slides when relevant
-- Ask clarifying questions if the student's question is unclear"""
-
-
-@dataclass
-class ContextMessage:
-    """A message in the session context (short-term memory)."""
-    role: str  # "user" or "assistant"
-    content: str
-    
-    def to_dict(self) -> dict:
-        return {"role": self.role, "content": self.content}
+- Provide rich, detailed explanations
+- Use analogies and real-world examples
+- Break down complex topics into simpler parts
+- Ask follow-up questions to deepen understanding
+- Reference slides when using course content directly"""
 
 
 @dataclass
@@ -100,16 +103,10 @@ class TutorRequest:
     course_id: UUID
     question: str
     retrieval_result: RetrievalResult
-    session_token: Optional[str] = None  # For anonymous session tracking
-    context_messages: Optional[List[ContextMessage]] = None  # Short-term memory (last 3-5 messages)
-    
-    # Backwards compatibility
-    @property
-    def conversation_history(self) -> Optional[List[dict]]:
-        """Convert context_messages to conversation_history format."""
-        if not self.context_messages:
-            return None
-        return [msg.to_dict() for msg in self.context_messages[-MAX_CONTEXT_MESSAGES:]]
+    conversation_history: Optional[List[dict]] = None  # For multi-turn
+    session_token: Optional[str] = None  # For analytics grouping
+    context_messages: Optional[List[ContextMessage]] = None  # Short-term memory
+    response_mode: str = "enhanced"  # "strict" or "enhanced"
 
 
 @dataclass
@@ -121,7 +118,6 @@ class TutorResponse:
     model_used: str
     confidence: Optional[str] = None  # "validated" | "no_context" | "generated"
     confidence_score: Optional[int] = None  # 0-100 numeric score
-    query_topic: Optional[str] = None  # Extracted topic for analytics
     response_time_ms: Optional[int] = None  # Response latency
 
 
@@ -134,28 +130,33 @@ class TutorService:
     2. Build context-aware prompt
     3. Invoke Gemini with tutor system prompt
     4. Shape response with source attribution
-    5. Log analytics (metadata only, not full text)
     """
     
     def __init__(
         self, 
         db: AsyncSession,
         model_name: str = None,
-        enable_analytics: bool = True
+        enable_analytics: bool = False
     ):
         self.db = db
         self.model_name = model_name or settings.LLM_MODEL
-        self.chunk_repo = DocumentChunkRepository(DocumentChunk, db)
-        self.analytics_repo = AnalyticsRepository(db) if enable_analytics else None
         self.enable_analytics = enable_analytics
+        self.chunk_repo = DocumentChunkRepository(DocumentChunk, db)
         
-        # Configure Gemini
+        # Configure Gemini - model created per request to support response_mode
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(
-            model_name=self.model_name,
-            system_instruction=TUTOR_SYSTEM_PROMPT
+        logger.info(f"Initialized TutorService with model: {self.model_name}")
+    
+    def _get_model(self, response_mode: str = "enhanced"):
+        """Get model configured with appropriate system prompt based on response_mode."""
+        system_prompt = (
+            TUTOR_SYSTEM_PROMPT_STRICT if response_mode == "strict" 
+            else TUTOR_SYSTEM_PROMPT_ENHANCED
         )
-        logger.info(f"Initialized TutorService with model: {self.model_name}, analytics: {enable_analytics}")
+        return genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=system_prompt
+        )
     
     async def respond(self, request: TutorRequest) -> TutorResponse:
         """
@@ -163,8 +164,6 @@ class TutorService:
         
         Uses retrieved chunks as the ONLY source of truth.
         """
-        start_time = time.time()
-        
         # 1. Fetch full text for retrieved chunks
         chunk_ids = [
             UUID(chunk.chunk_id) 
@@ -181,9 +180,13 @@ class TutorService:
         # 4. Check for assignment-related keywords (pre-LLM safety)
         is_assignment_question = self._detect_assignment_question(request.question)
         
-        # 5. Invoke LLM
+        # 5. Invoke LLM with appropriate response mode
         try:
-            response = await self._invoke_llm(prompt, request.conversation_history)
+            response = await self._invoke_llm(
+                prompt, 
+                request.conversation_history,
+                request.response_mode
+            )
         except Exception as e:
             logger.error(f"LLM invocation failed: {str(e)}")
             raise
@@ -191,37 +194,15 @@ class TutorService:
         # 6. Build source references
         sources = self._build_sources(request.retrieval_result.chunks)
         
-        # 7. Determine confidence level and score
+        # 7. Determine confidence level
         confidence = "no_context" if not request.retrieval_result.chunks else "generated"
-        confidence_score = self._calculate_confidence_score(request.retrieval_result.chunks)
-        
-        # 8. Extract topic for analytics
-        query_topic = self._extract_topic(request.question)
-        
-        # 9. Calculate response time
-        response_time_ms = int((time.time() - start_time) * 1000)
-        
-        # 10. Log analytics (fire-and-forget, don't block response)
-        self._log_analytics_fire_and_forget(
-            request=request,
-            response_text=response,
-            confidence_score=confidence_score,
-            sources=sources,
-            was_assignment_blocked=is_assignment_question,
-            was_hallucination_detected=False,
-            response_time_ms=response_time_ms,
-            query_topic=query_topic
-        )
         
         return TutorResponse(
             answer=response,
             sources=sources,
             was_redirected=is_assignment_question,
             model_used=self.model_name,
-            confidence=confidence,
-            confidence_score=confidence_score,
-            query_topic=query_topic,
-            response_time_ms=response_time_ms
+            confidence=confidence
         )
     
     def _build_context(
@@ -282,19 +263,21 @@ Please help the student understand this topic based on the course material above
     async def _invoke_llm(
         self, 
         prompt: str, 
-        conversation_history: Optional[List[dict]]
+        conversation_history: Optional[List[dict]],
+        response_mode: str = "enhanced"
     ) -> str:
         """Invoke Gemini with the prompt."""
+        model = self._get_model(response_mode)
         
         # Build chat history if provided
         if conversation_history:
-            chat = self.model.start_chat(history=[
+            chat = model.start_chat(history=[
                 {"role": msg["role"], "parts": [msg["content"]]}
                 for msg in conversation_history
             ])
             response = chat.send_message(prompt)
         else:
-            response = self.model.generate_content(prompt)
+            response = model.generate_content(prompt)
         
         return response.text
     
@@ -314,138 +297,6 @@ Please help the student understand this topic based on the course material above
                 source["session_id"] = chunk.session_id
             sources.append(source)
         return sources
-    
-    def _calculate_confidence_score(self, chunks: List[RetrievedChunk]) -> int:
-        """
-        Calculate a 0-100 confidence score based on retrieval quality.
-        
-        Factors:
-        - Number of chunks retrieved
-        - Average relevance score
-        - Presence of high-relevance chunks (>0.8)
-        """
-        if not chunks:
-            return 0
-        
-        avg_score = sum(c.score for c in chunks) / len(chunks)
-        high_relevance_count = sum(1 for c in chunks if c.score > 0.8)
-        
-        # Base score from average relevance (0-60)
-        base_score = int(avg_score * 60)
-        
-        # Bonus for multiple sources (0-20)
-        source_bonus = min(len(chunks) * 5, 20)
-        
-        # Bonus for high-relevance chunks (0-20)
-        high_rel_bonus = min(high_relevance_count * 10, 20)
-        
-        return min(base_score + source_bonus + high_rel_bonus, 100)
-    
-    def _extract_topic(self, question: str) -> Optional[str]:
-        """
-        Extract a topic category from the question for analytics.
-        Uses simple keyword matching (LLM extraction would be more accurate but slower).
-        """
-        question_lower = question.lower()
-        
-        # Common CS/programming topics
-        topic_keywords = {
-            "algorithm": ["algorithm", "sorting", "searching", "binary search", "quicksort", "mergesort"],
-            "data_structure": ["data structure", "array", "linked list", "tree", "graph", "hash", "stack", "queue"],
-            "complexity": ["time complexity", "space complexity", "big o", "o(n)", "complexity"],
-            "recursion": ["recursion", "recursive", "base case"],
-            "programming": ["code", "implement", "function", "method", "class", "programming"],
-            "database": ["database", "sql", "query", "table", "join"],
-            "networking": ["network", "tcp", "http", "api", "protocol"],
-            "security": ["security", "encryption", "authentication", "authorization"],
-            "machine_learning": ["machine learning", "ml", "neural", "ai", "model", "training"],
-            "general": ["explain", "what is", "how does", "why", "define"],
-        }
-        
-        for topic, keywords in topic_keywords.items():
-            if any(kw in question_lower for kw in keywords):
-                return topic
-        
-        return "other"
-    
-    async def _log_analytics(
-        self,
-        request: TutorRequest,
-        response_text: str,
-        confidence_score: int,
-        sources: List[dict],
-        was_assignment_blocked: bool,
-        was_hallucination_detected: bool,
-        response_time_ms: int,
-        query_topic: Optional[str]
-    ):
-        """
-        Log query analytics to the database.
-        
-        IMPORTANT: We store metadata only, NOT the actual question/response text.
-        This preserves privacy while enabling insights.
-        """
-        if not self.enable_analytics or not self.analytics_repo:
-            return
-        
-        try:
-            # Prepare source metadata for storage
-            source_metadata = [
-                {"slide": s.get("slide_number"), "title": s.get("slide_title", "")[:50]}
-                for s in sources
-            ] if sources else None
-            
-            await self.analytics_repo.log_query(
-                course_id=request.course_id,
-                student_id=request.student_id,
-                session_token=request.session_token,
-                query_topic=query_topic,
-                query_length=len(request.question),
-                response_length=len(response_text),
-                confidence_score=confidence_score,
-                sources=source_metadata,
-                was_hallucination_detected=was_hallucination_detected,
-                was_assignment_blocked=was_assignment_blocked,
-                context_messages_count=len(request.context_messages) if request.context_messages else 0,
-                response_time_ms=response_time_ms,
-            )
-            logger.debug(f"Logged analytics for course {request.course_id}")
-        except Exception as e:
-            # Don't fail the response if analytics logging fails
-            logger.error(f"Failed to log analytics: {str(e)}")
-    
-    def _log_analytics_fire_and_forget(
-        self,
-        request: TutorRequest,
-        response_text: str,
-        confidence_score: int,
-        sources: List[dict],
-        was_assignment_blocked: bool,
-        was_hallucination_detected: bool,
-        response_time_ms: int,
-        query_topic: Optional[str]
-    ):
-        """
-        Schedule analytics logging as a fire-and-forget background task.
-        
-        This doesn't block the response - analytics failures won't affect the user.
-        """
-        async def _log_with_error_handling():
-            try:
-                await self._log_analytics(
-                    request=request,
-                    response_text=response_text,
-                    confidence_score=confidence_score,
-                    sources=sources,
-                    was_assignment_blocked=was_assignment_blocked,
-                    was_hallucination_detected=was_hallucination_detected,
-                    response_time_ms=response_time_ms,
-                    query_topic=query_topic
-                )
-            except Exception as e:
-                logger.error(f"Background analytics logging failed: {str(e)}")
-        
-        asyncio.create_task(_log_with_error_handling())
 
 
 class SelfReflectiveTutorService(TutorService):
@@ -486,19 +337,18 @@ class SelfReflectiveTutorService(TutorService):
             question=request.question
         )
         
-        was_hallucination_detected = False
-        
         try:
             # Validation should be stateless - don't pass conversation history
+            # Use enhanced mode for validation to get better reasoning
             validation_response = await self._invoke_llm(
                 validation_prompt, 
-                None  # No conversation history for validation
+                None,  # No conversation history for validation
+                "enhanced"  # Validation always uses enhanced mode
             )
             
             # Use exact/whole-word match to avoid false positives
             normalized_response = validation_response.strip().upper()
             can_answer = normalized_response == "YES"
-            was_hallucination_detected = not can_answer  # Detected potential hallucination risk
             
             logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
             
@@ -510,21 +360,7 @@ class SelfReflectiveTutorService(TutorService):
         # 4. If validation says NO, return early with honest response
         if not can_answer:
             is_assignment_question = self._detect_assignment_question(request.question)
-            query_topic = self._extract_topic(request.question)
             response_time_ms = int((time.time() - start_time) * 1000)
-            
-            # Log analytics for rejected queries (fire-and-forget, don't block response)
-            self._log_analytics_fire_and_forget(
-                request=request,
-                response_text="No context available",
-                confidence_score=0,
-                sources=[],
-                was_assignment_blocked=is_assignment_question,
-                was_hallucination_detected=True,
-                response_time_ms=response_time_ms,
-                query_topic=query_topic
-            )
-            
             return TutorResponse(
                 answer="I don't have enough information in the course materials to answer this question confidently. Could you rephrase your question or ask about a topic covered in the lectures?",
                 sources=[],
@@ -532,16 +368,19 @@ class SelfReflectiveTutorService(TutorService):
                 model_used=self.model_name,
                 confidence="no_context",
                 confidence_score=0,
-                query_topic=query_topic,
                 response_time_ms=response_time_ms
             )
         
-        # 5. Validation passed - generate the answer
+        # 5. Validation passed - generate the answer using requested response mode
         prompt = self._build_prompt(request.question, context)
         is_assignment_question = self._detect_assignment_question(request.question)
         
         try:
-            response = await self._invoke_llm(prompt, request.conversation_history)
+            response = await self._invoke_llm(
+                prompt, 
+                request.conversation_history,
+                request.response_mode
+            )
         except Exception as e:
             logger.error(f"LLM invocation failed: {str(e)}")
             raise
@@ -549,24 +388,11 @@ class SelfReflectiveTutorService(TutorService):
         # 6. Build source references
         sources = self._build_sources(request.retrieval_result.chunks)
         
-        # 7. Calculate confidence and extract topic
-        confidence_score = self._calculate_confidence_score(request.retrieval_result.chunks)
-        # Boost score for validated responses
-        confidence_score = min(confidence_score + 10, 100)
-        query_topic = self._extract_topic(request.question)
+        # Calculate response time
         response_time_ms = int((time.time() - start_time) * 1000)
         
-        # 8. Log analytics (fire-and-forget, don't block response)
-        self._log_analytics_fire_and_forget(
-            request=request,
-            response_text=response,
-            confidence_score=confidence_score,
-            sources=sources,
-            was_assignment_blocked=is_assignment_question,
-            was_hallucination_detected=was_hallucination_detected,
-            response_time_ms=response_time_ms,
-            query_topic=query_topic
-        )
+        # Calculate confidence score based on number of sources and relevance
+        confidence_score = min(100, len(sources) * 20) if sources else 50
         
         return TutorResponse(
             answer=response,
@@ -575,7 +401,6 @@ class SelfReflectiveTutorService(TutorService):
             model_used=self.model_name,
             confidence="validated",
             confidence_score=confidence_score,
-            query_topic=query_topic,
             response_time_ms=response_time_ms
         )
 

@@ -144,11 +144,6 @@ class GeminiEmbeddingService(EmbeddingService):
         if not texts:
             return []
         
-        # Validate all texts - reject empty/whitespace-only strings (consistent with embed_text)
-        for i, text in enumerate(texts):
-            if not text or not text.strip():
-                raise ValueError(f"Cannot embed empty text at index {i}")
-        
         results = []
         total = len(texts)
         
@@ -269,11 +264,6 @@ class LocalEmbeddingService(EmbeddingService):
         """Generate embeddings for multiple texts."""
         if not texts:
             return []
-        
-        # Validate all texts - reject empty/whitespace-only strings (consistent with embed_text)
-        for i, text in enumerate(texts):
-            if not text or not text.strip():
-                raise ValueError(f"Cannot embed empty text at index {i}")
         
         try:
             # Batch encode in thread pool

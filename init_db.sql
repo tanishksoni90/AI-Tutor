@@ -58,38 +58,3 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- Function to auto-update updated_at column on row modification
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Triggers for auto-updating updated_at on each table
-CREATE TRIGGER update_orgs_updated_at
-    BEFORE UPDATE ON orgs
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_courses_updated_at
-    BEFORE UPDATE ON courses
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_students_updated_at
-    BEFORE UPDATE ON students
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_documents_updated_at
-    BEFORE UPDATE ON documents
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_document_chunks_updated_at
-    BEFORE UPDATE ON document_chunks
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
