@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate_to_bcrypt_limit(password: str, limit: int = 72) -> str:
+    """
+    Safely truncate password to bcrypt's 72-byte limit.
+    
+    Handles multi-byte UTF-8 characters correctly by encoding to bytes,
+    truncating, and decoding back without breaking characters.
+    """
+    encoded = password.encode('utf-8')
+    if len(encoded) <= limit:
+        return password
+    # Truncate bytes and decode, ignoring incomplete multi-byte sequences
+    return encoded[:limit].decode('utf-8', errors='ignore')
+
+
 class TokenData(BaseModel):
     """Data encoded in JWT token."""
     student_id: UUID
@@ -42,15 +56,13 @@ class Token(BaseModel):
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    # bcrypt has a 72 byte limit, truncate if needed
-    truncated_password = plain_password[:72] if len(plain_password.encode('utf-8')) > 72 else plain_password
+    truncated_password = _truncate_to_bcrypt_limit(plain_password)
     return pwd_context.verify(truncated_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    # bcrypt has a 72 byte limit, truncate if needed
-    truncated_password = password[:72] if len(password.encode('utf-8')) > 72 else password
+    truncated_password = _truncate_to_bcrypt_limit(password)
     return pwd_context.hash(truncated_password)
 
 

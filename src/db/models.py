@@ -76,6 +76,7 @@ class Course(Base):
     documents = relationship("Document", back_populates="course")
     enrollments = relationship("Enrollment", back_populates="course")
     chunks = relationship("DocumentChunk", back_populates="course")
+    query_analytics = relationship("QueryAnalytics", back_populates="course")
 
 class StudentRole(str, enum.Enum):
     STUDENT = "student"
@@ -96,6 +97,7 @@ class Student(Base):
     
     org = relationship("Org", back_populates="students")
     enrollments = relationship("Enrollment", back_populates="student")
+    query_analytics = relationship("QueryAnalytics", back_populates="student")
 
 class Enrollment(Base):
     """Links a Student to a Course"""
@@ -183,5 +185,5 @@ class QueryAnalytics(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    student = relationship("Student")
-    course = relationship("Course")
+    student = relationship("Student", back_populates="query_analytics")
+    course = relationship("Course", back_populates="query_analytics")

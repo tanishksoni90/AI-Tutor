@@ -158,6 +158,36 @@ class TutorService:
             system_instruction=system_prompt
         )
     
+    def _merge_context_messages(
+        self,
+        conversation_history: Optional[List[dict]],
+        context_messages: Optional[List[ContextMessage]]
+    ) -> Optional[List[dict]]:
+        """
+        Merge context_messages (short-term memory) into conversation_history.
+        
+        Context messages are prepended to conversation history as they represent
+        recent context that should inform the current response.
+        """
+        # Convert context_messages to the dict format expected by LLM
+        context_as_history = []
+        if context_messages:
+            context_as_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in context_messages
+            ]
+        
+        # If no conversation history, just return context messages (or None if empty)
+        if not conversation_history:
+            return context_as_history if context_as_history else None
+        
+        # If no context messages, return conversation history as-is
+        if not context_as_history:
+            return conversation_history
+        
+        # Merge: context_messages first (short-term memory), then conversation_history
+        return context_as_history + conversation_history
+    
     async def respond(self, request: TutorRequest) -> TutorResponse:
         """
         Generate a tutor response for the student's question.
@@ -180,21 +210,27 @@ class TutorService:
         # 4. Check for assignment-related keywords (pre-LLM safety)
         is_assignment_question = self._detect_assignment_question(request.question)
         
-        # 5. Invoke LLM with appropriate response mode
+        # 5. Merge context_messages into conversation_history
+        merged_history = self._merge_context_messages(
+            request.conversation_history,
+            request.context_messages
+        )
+        
+        # 6. Invoke LLM with appropriate response mode
         try:
             response = await self._invoke_llm(
                 prompt, 
-                request.conversation_history,
+                merged_history,
                 request.response_mode
             )
         except Exception as e:
             logger.error(f"LLM invocation failed: {str(e)}")
             raise
         
-        # 6. Build source references
+        # 7. Build source references
         sources = self._build_sources(request.retrieval_result.chunks)
         
-        # 7. Determine confidence level
+        # 8. Determine confidence level
         confidence = "no_context" if not request.retrieval_result.chunks else "generated"
         
         return TutorResponse(
@@ -339,16 +375,16 @@ class SelfReflectiveTutorService(TutorService):
         
         try:
             # Validation should be stateless - don't pass conversation history
-            # Use enhanced mode for validation to get better reasoning
+            # Use strict mode for validation to get concise YES/NO responses
             validation_response = await self._invoke_llm(
                 validation_prompt, 
                 None,  # No conversation history for validation
-                "enhanced"  # Validation always uses enhanced mode
+                "strict"  # Validation uses strict mode for concise responses
             )
             
-            # Use exact/whole-word match to avoid false positives
+            # Use prefix match to handle verbose responses (e.g., "YES, because...")
             normalized_response = validation_response.strip().upper()
-            can_answer = normalized_response == "YES"
+            can_answer = normalized_response.startswith("YES")
             
             logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
             
@@ -375,10 +411,16 @@ class SelfReflectiveTutorService(TutorService):
         prompt = self._build_prompt(request.question, context)
         is_assignment_question = self._detect_assignment_question(request.question)
         
+        # Merge context_messages into conversation_history
+        merged_history = self._merge_context_messages(
+            request.conversation_history,
+            request.context_messages
+        )
+        
         try:
             response = await self._invoke_llm(
                 prompt, 
-                request.conversation_history,
+                merged_history,
                 request.response_mode
             )
         except Exception as e:

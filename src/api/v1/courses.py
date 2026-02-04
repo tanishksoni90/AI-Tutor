@@ -97,6 +97,83 @@ async def get_enrolled_courses(
     return result
 
 
+# Response model for student stats
+class StudentStatsResponse(BaseModel):
+    """Student learning statistics from backend analytics."""
+    questions_asked: int
+    unique_sessions: int
+    study_streak_days: int
+    active_days: List[str] = []
+
+
+@router.get("/stats/me", response_model=StudentStatsResponse)
+async def get_my_stats(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get statistics for the current student.
+    
+    Returns real data from QueryAnalytics table.
+    """
+    # Total questions asked
+    questions_query = (
+        select(func.count(QueryAnalytics.id))
+        .where(QueryAnalytics.student_id == current_user.id)
+    )
+    questions_asked = (await db.execute(questions_query)).scalar() or 0
+    
+    # Unique session tokens
+    sessions_query = (
+        select(func.count(func.distinct(QueryAnalytics.session_token)))
+        .where(QueryAnalytics.student_id == current_user.id)
+        .where(QueryAnalytics.session_token.isnot(None))
+    )
+    unique_sessions = (await db.execute(sessions_query)).scalar() or 0
+    
+    # Get active days (days with at least one query)
+    active_days_query = (
+        select(func.date(QueryAnalytics.created_at))
+        .where(QueryAnalytics.student_id == current_user.id)
+        .group_by(func.date(QueryAnalytics.created_at))
+        .order_by(func.date(QueryAnalytics.created_at).desc())
+        .limit(30)  # Last 30 active days
+    )
+    active_days_result = await db.execute(active_days_query)
+    active_days = [str(d[0]) for d in active_days_result.all()]
+    
+    # Calculate study streak
+    study_streak = 0
+    if active_days:
+        today = datetime.utcnow().date()
+        today_str = today.isoformat()
+        consecutive_days = 0
+        
+        # Start from today if active today, otherwise start from yesterday
+        if today_str in active_days:
+            check_date = today
+        else:
+            check_date = today - timedelta(days=1)
+        
+        for day_str in active_days:
+            day = datetime.strptime(day_str, "%Y-%m-%d").date()
+            if day == check_date:
+                consecutive_days += 1
+                check_date = check_date - timedelta(days=1)
+            elif day < check_date:
+                # Gap in activity, streak broken
+                break
+        
+        study_streak = consecutive_days
+    
+    return StudentStatsResponse(
+        questions_asked=questions_asked,
+        unique_sessions=unique_sessions,
+        study_streak_days=study_streak,
+        active_days=active_days[:7]  # Return last 7 active days
+    )
+
+
 @router.get("/{course_id}", response_model=EnrolledCourseResponse)
 async def get_course(
     course_id: UUID,
@@ -161,75 +238,4 @@ async def get_course(
         progress=None,
         last_activity=None,
         sessions=sessions
-    )
-
-
-# Response model for student stats
-class StudentStatsResponse(BaseModel):
-    """Student learning statistics from backend analytics."""
-    questions_asked: int
-    unique_sessions: int
-    study_streak_days: int
-    active_days: List[str] = []
-
-
-@router.get("/stats/me", response_model=StudentStatsResponse)
-async def get_my_stats(
-    current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get statistics for the current student.
-    
-    Returns real data from QueryAnalytics table.
-    """
-    # Total questions asked
-    questions_query = (
-        select(func.count(QueryAnalytics.id))
-        .where(QueryAnalytics.student_id == current_user.id)
-    )
-    questions_asked = (await db.execute(questions_query)).scalar() or 0
-    
-    # Unique session tokens
-    sessions_query = (
-        select(func.count(func.distinct(QueryAnalytics.session_token)))
-        .where(QueryAnalytics.student_id == current_user.id)
-        .where(QueryAnalytics.session_token.isnot(None))
-    )
-    unique_sessions = (await db.execute(sessions_query)).scalar() or 0
-    
-    # Get active days (days with at least one query)
-    active_days_query = (
-        select(func.date(QueryAnalytics.created_at))
-        .where(QueryAnalytics.student_id == current_user.id)
-        .group_by(func.date(QueryAnalytics.created_at))
-        .order_by(func.date(QueryAnalytics.created_at).desc())
-        .limit(30)  # Last 30 active days
-    )
-    active_days_result = await db.execute(active_days_query)
-    active_days = [str(d[0]) for d in active_days_result.all()]
-    
-    # Calculate study streak
-    study_streak = 0
-    if active_days:
-        today = datetime.utcnow().date()
-        consecutive_days = 0
-        check_date = today
-        
-        for day_str in active_days:
-            day = datetime.strptime(day_str, "%Y-%m-%d").date()
-            if day == check_date:
-                consecutive_days += 1
-                check_date = check_date - timedelta(days=1)
-            elif day < check_date:
-                # Gap in activity, streak broken
-                break
-        
-        study_streak = consecutive_days
-    
-    return StudentStatsResponse(
-        questions_asked=questions_asked,
-        unique_sessions=unique_sessions,
-        study_streak_days=study_streak,
-        active_days=active_days[:7]  # Return last 7 active days
     )

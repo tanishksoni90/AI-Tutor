@@ -230,13 +230,12 @@ class RetrievalService:
         """
         client = qdrant_client.get_client()
         
-        # Fetch points by ID (using query_points for newer qdrant-client versions)
-        result = client.retrieve(
+        # Fetch points by ID using client.retrieve() (qdrant-client >= 1.0 returns List[Record])
+        points = client.retrieve(
             collection_name=settings.QDRANT_COLLECTION_NAME,
             ids=chunk_ids,
             with_payload=True
         )
-        points = result if isinstance(result, list) else result.points
         
         # Note: Full text is in PostgreSQL, not Qdrant
         # This returns preview only - full text fetch needs DB query

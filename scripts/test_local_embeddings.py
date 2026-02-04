@@ -54,7 +54,11 @@ async def main():
     doc2 = await service.embed_text("The weather is sunny today.")
     
     def cosine_similarity(v1, v2):
-        return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
+        if norm1 < 1e-8 or norm2 < 1e-8:
+            return 0.0
+        return np.dot(v1, v2) / (norm1 * norm2)
     
     sim1 = cosine_similarity(query.vector, doc1.vector)
     sim2 = cosine_similarity(query.vector, doc2.vector)

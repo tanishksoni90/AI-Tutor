@@ -19,7 +19,7 @@ async def check_db():
             print(f'  {row}')
             
         # Check courses
-        result = await conn.execute(text('SELECT id, name, total_sessions FROM courses'))
+        result = await conn.execute(text('SELECT id, name, total_sessions FROM courses LIMIT 5'))
         rows = result.fetchall()
         print('\nCourses:')
         for row in rows:

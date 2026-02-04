@@ -65,7 +65,16 @@ class VectorDBClient:
                 
                 logger.info("Collection and indexes created successfully.")
             else:
-                logger.info(f"Collection {self.collection_name} already exists.")
+                # Validate that existing collection has correct vector dimension
+                collection_info = self.client.get_collection(self.collection_name)
+                existing_dim = collection_info.config.params.vectors.size
+                if existing_dim != self.vector_size:
+                    raise ValueError(
+                        f"Collection '{self.collection_name}' exists with vector dimension {existing_dim}, "
+                        f"but current embedding config expects {self.vector_size}. "
+                        f"Please delete the collection or update embedding configuration."
+                    )
+                logger.info(f"Collection {self.collection_name} already exists with matching dimension {existing_dim}.")
                 
         except Exception as e:
             logger.error(f"Failed to initialize Qdrant: {str(e)}")

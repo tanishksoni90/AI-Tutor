@@ -16,7 +16,7 @@ import sys
 import os
 import re
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 import uuid
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -31,10 +31,11 @@ from src.services.ingestion import IngestionService, IngestionRequest
 # Course metadata
 COURSE_NAME = "NextGen - AI Masterclass (Bengali #901)"
 COURSE_TYPE = "certification"  # Large course with 20+ sessions
-DATA_FOLDER = "/Users/adda247/Documents/AI-Tutor/data"
+# Use environment variable with fallback to project-relative path
+DATA_FOLDER = os.environ.get('DATA_FOLDER', os.path.join(os.path.dirname(__file__), '..', 'data'))
 
 
-def parse_filename(filename: str) -> Dict[str, str]:
+def parse_filename(filename: str) -> Dict[str, Any]:
     """
     Parse PDF filename to extract metadata.
     
@@ -210,7 +211,8 @@ async def main():
         if result['success']:
             print(f"  ✅ {result['slides']} slides → {result['chunks']} chunks → {result['embeddings']} embeddings")
         else:
-            print(f"  ❌ ERROR: {result['error'][:100]}")
+            error_text = (result.get('error') or 'Unknown error')[:100]
+            print(f"  ❌ ERROR: {error_text}")
     
     # 5. Summary
     print(f"\n{'='*80}")
@@ -234,7 +236,8 @@ async def main():
     if failed:
         print(f"\n❌ Failed files:")
         for r in failed:
-            print(f"  - {r['filename']}: {r['error'][:80]}")
+            error_preview = (r.get('error') or 'Unknown error')[:80]
+            print(f"  - {r['filename']}: {error_preview}")
     
     print(f"\n{'='*80}")
     print(f"Course ID: {course_id}")
