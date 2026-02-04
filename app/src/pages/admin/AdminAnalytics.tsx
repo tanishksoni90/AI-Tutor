@@ -33,6 +33,7 @@ interface AnalyticsSummary {
   avg_response_time_ms: number;
   popular_topics: { topic: string; count: number }[];
   daily_usage: { date: string; queries: number }[];
+  active_users: number;
 }
 
 function StatCard({ 
@@ -141,7 +142,8 @@ function AdminAnalyticsContent() {
         assignments_blocked: 0,
         avg_response_time_ms: 0,
         popular_topics: [],
-        daily_usage: []
+        daily_usage: [],
+        active_users: 0
       });
     } finally {
       setIsLoading(false);
@@ -220,9 +222,9 @@ function AdminAnalyticsContent() {
         />
         <StatCard
           title="Active Users"
-          value="45"
+          value={analytics?.active_users?.toLocaleString() || 0}
           icon={Users}
-          trend="+12% this week"
+          trend={`${analytics?.queries_today || 0} queries today`}
           trendDirection="up"
           color="primary"
         />

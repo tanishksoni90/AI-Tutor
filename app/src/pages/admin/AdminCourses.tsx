@@ -70,17 +70,27 @@ const typeBannerColors: Record<string, string> = {
 
 function AdminCoursesContent() {
   const [courses, setCourses] = useState<CourseData[]>([]);
+  const [users, setUsers] = useState<{ id: string; email: string; full_name?: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isEnrollDialogOpen, setIsEnrollDialogOpen] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState<CourseData | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [newCourse, setNewCourse] = useState({
     name: '',
     course_type: 'standard'
   });
+  const [editCourse, setEditCourse] = useState({
+    name: '',
+    course_type: ''
+  });
 
   useEffect(() => {
     loadCourses();
+    loadUsers();
   }, []);
 
   const loadCourses = async () => {
@@ -92,6 +102,16 @@ function AdminCoursesContent() {
       setCourses([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadUsers = async () => {
+    try {
+      const data = await api.getAdminUsers({ role: 'student' });
+      setUsers(data.map((u: any) => ({ id: u.id, email: u.email, full_name: u.full_name })));
+    } catch (error) {
+      console.error('Failed to load users:', error);
+      setUsers([]);
     }
   };
 
@@ -114,6 +134,52 @@ function AdminCoursesContent() {
       toast.success('Course deleted');
     } catch (error) {
       toast.error('Failed to delete course');
+    }
+  };
+
+  const handleEditCourse = (course: CourseData) => {
+    setSelectedCourse(course);
+    setEditCourse({ name: course.name, course_type: course.course_type });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!selectedCourse) return;
+    try {
+      await api.updateCourse(selectedCourse.id, editCourse);
+      setCourses(courses.map(c => 
+        c.id === selectedCourse.id 
+          ? { ...c, name: editCourse.name, course_type: editCourse.course_type }
+          : c
+      ));
+      setIsEditDialogOpen(false);
+      setSelectedCourse(null);
+      toast.success('Course updated');
+    } catch (error) {
+      toast.error('Failed to update course');
+    }
+  };
+
+  const handleManageEnrollments = (course: CourseData) => {
+    setSelectedCourse(course);
+    setSelectedUserId('');
+    setIsEnrollDialogOpen(true);
+  };
+
+  const handleEnrollUser = async () => {
+    if (!selectedCourse || !selectedUserId) return;
+    try {
+      await api.enrollUser(selectedUserId, selectedCourse.id);
+      // Update enrollment count locally
+      setCourses(courses.map(c =>
+        c.id === selectedCourse.id
+          ? { ...c, enrollments_count: c.enrollments_count + 1 }
+          : c
+      ));
+      setSelectedUserId('');
+      toast.success('Student enrolled successfully');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to enroll student');
     }
   };
 
@@ -231,11 +297,11 @@ function AdminCoursesContent() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleEditCourse(course)}>
                         <Edit className="w-4 h-4 mr-2" />
                         Edit Course
                       </DropdownMenuItem>
-                      <DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleManageEnrollments(course)}>
                         <UserPlus className="w-4 h-4 mr-2" />
                         Manage Enrollments
                       </DropdownMenuItem>
@@ -332,6 +398,97 @@ function AdminCoursesContent() {
             </Button>
             <Button onClick={handleAddCourse}>
               Create Course
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Course Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Course</DialogTitle>
+            <DialogDescription>
+              Update course details
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Course Name</Label>
+              <Input
+                id="edit-name"
+                placeholder="e.g., Data Structures & Algorithms"
+                value={editCourse.name}
+                onChange={(e) => setEditCourse({ ...editCourse, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-type">Course Type</Label>
+              <Select 
+                value={editCourse.course_type} 
+                onValueChange={(v) => setEditCourse({ ...editCourse, course_type: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="micro">Micro (5-10 sessions)</SelectItem>
+                  <SelectItem value="standard">Standard (10-50 sessions)</SelectItem>
+                  <SelectItem value="certification">Certification (50+ sessions)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit}>
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Enrollments Dialog */}
+      <Dialog open={isEnrollDialogOpen} onOpenChange={setIsEnrollDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Manage Enrollments</DialogTitle>
+            <DialogDescription>
+              {selectedCourse?.name} - Currently {selectedCourse?.enrollments_count} students enrolled
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="enroll-user">Enroll Student</Label>
+              <Select 
+                value={selectedUserId} 
+                onValueChange={setSelectedUserId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a student" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.length === 0 ? (
+                    <SelectItem value="" disabled>No students available</SelectItem>
+                  ) : (
+                    users.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {user.full_name || user.email}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEnrollDialogOpen(false)}>
+              Close
+            </Button>
+            <Button onClick={handleEnrollUser} disabled={!selectedUserId}>
+              Enroll Student
             </Button>
           </DialogFooter>
         </DialogContent>

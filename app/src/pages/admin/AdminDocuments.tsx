@@ -65,6 +65,7 @@ const contentTypeColors: Record<string, string> = {
 
 function AdminDocumentsContent() {
   const [documents, setDocuments] = useState<DocumentData[]>([]);
+  const [courses, setCourses] = useState<{ id: string; name: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
@@ -82,6 +83,7 @@ function AdminDocumentsContent() {
 
   useEffect(() => {
     loadDocuments();
+    loadCourses();
   }, []);
 
   const loadDocuments = async () => {
@@ -93,6 +95,16 @@ function AdminDocumentsContent() {
       setDocuments([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadCourses = async () => {
+    try {
+      const data = await api.getAdminCourses();
+      setCourses(data.map((c: any) => ({ id: c.id, name: c.name })));
+    } catch (error) {
+      console.error('Failed to load courses:', error);
+      setCourses([]);
     }
   };
 
@@ -387,9 +399,15 @@ function AdminDocumentsContent() {
                   <SelectValue placeholder="Select a course" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1">Data Structures & Algorithms</SelectItem>
-                  <SelectItem value="2">Machine Learning Fundamentals</SelectItem>
-                  <SelectItem value="3">Web Development Bootcamp</SelectItem>
+                  {courses.length === 0 ? (
+                    <SelectItem value="" disabled>No courses available</SelectItem>
+                  ) : (
+                    courses.map((course) => (
+                      <SelectItem key={course.id} value={course.id}>
+                        {course.name}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
