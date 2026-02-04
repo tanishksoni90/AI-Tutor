@@ -20,6 +20,7 @@ from src.api.v1.tutor import router as tutor_router
 from src.api.v1.ingestion import router as ingestion_router
 from src.api.v1.health import router as health_router
 from src.api.v1.courses import router as courses_router
+from src.api.v1.admin import router as admin_router
 from src.middleware.rate_limiting import RateLimitMiddleware
 from src.middleware.error_handling import ErrorHandlingMiddleware, create_http_exception_handler
 from src.middleware.logging import RequestLoggingMiddleware
@@ -163,6 +164,11 @@ def create_application() -> FastAPI:
         courses_router, 
         prefix=settings.API_V1_STR,
         tags=["Courses"]
+    )
+    application.include_router(
+        admin_router, 
+        prefix=settings.API_V1_STR,
+        tags=["Admin"]
     )
     
     # ============================================

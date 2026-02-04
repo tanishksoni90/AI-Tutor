@@ -84,6 +84,7 @@ class AnalyticsSummary(BaseModel):
     avg_response_time_ms: float
     popular_topics: List[dict]
     daily_usage: List[dict]
+    active_users: int = 0  # Unique users in the time period
 
 
 class DashboardStats(BaseModel):
@@ -319,7 +320,7 @@ async def delete_user(
     admin: AdminUser,
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a user (soft delete - sets inactive)."""
+    """Delete a user permanently (hard delete)."""
     result = await db.execute(
         select(Student).where(
             Student.id == user_id,
@@ -334,10 +335,19 @@ async def delete_user(
     if user.id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     
-    user.is_active = False
+    # Delete related data first (enrollments, query_analytics)
+    await db.execute(
+        delete(Enrollment).where(Enrollment.student_id == user_id)
+    )
+    await db.execute(
+        delete(QueryAnalytics).where(QueryAnalytics.student_id == user_id)
+    )
+    
+    # Now delete the user
+    await db.delete(user)
     await db.commit()
     
-    return {"success": True, "message": "User deactivated"}
+    return {"success": True, "message": "User deleted permanently"}
 
 
 # ==================== Course Management ====================
@@ -427,6 +437,61 @@ async def create_course(
         total_chunks=course.total_chunks,
         documents_count=0,
         enrollments_count=0,
+        created_at=course.created_at
+    )
+
+
+class CourseUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    course_type: Optional[str] = None
+
+
+@router.put("/courses/{course_id}", response_model=CourseAdminResponse)
+async def update_course(
+    course_id: UUID,
+    update_data: CourseUpdateRequest,
+    admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a course's details."""
+    result = await db.execute(
+        select(Course).where(
+            Course.id == course_id,
+            Course.org_id == admin.org_id
+        )
+    )
+    course = result.scalars().first()
+    
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Update fields if provided
+    if update_data.name is not None:
+        course.name = update_data.name
+    if update_data.course_type is not None:
+        course.course_type = update_data.course_type
+    
+    await db.commit()
+    await db.refresh(course)
+    
+    # Get counts
+    docs_count = (await db.execute(
+        select(func.count(Document.id)).where(Document.course_id == course_id)
+    )).scalar() or 0
+    
+    enrollments_count = (await db.execute(
+        select(func.count(Enrollment.id)).where(Enrollment.course_id == course_id)
+    )).scalar() or 0
+    
+    return CourseAdminResponse(
+        id=course.id,
+        name=course.name,
+        org_id=course.org_id,
+        course_type=course.course_type,
+        total_sessions=course.total_sessions,
+        total_chunks=course.total_chunks,
+        documents_count=docs_count,
+        enrollments_count=enrollments_count,
         created_at=course.created_at
     )
 
@@ -637,6 +702,18 @@ async def get_analytics(
         for date, count in daily_result.all()
     ]
     
+    # Active users (unique students with queries in the time period)
+    active_users_query = (
+        select(func.count(func.distinct(QueryAnalytics.student_id)))
+        .join(Course)
+        .where(
+            *base_filter,
+            QueryAnalytics.created_at >= start_date,
+            QueryAnalytics.student_id.isnot(None)
+        )
+    )
+    active_users = (await db.execute(active_users_query)).scalar() or 0
+    
     return AnalyticsSummary(
         total_queries=total_queries,
         queries_today=queries_today,
@@ -645,16 +722,21 @@ async def get_analytics(
         assignments_blocked=blocked,
         avg_response_time_ms=round(avg_time, 0),
         popular_topics=popular_topics,
-        daily_usage=daily_usage
+        daily_usage=daily_usage,
+        active_users=active_users
     )
 
 
 # ==================== Enrollment Management ====================
 
+class EnrollmentRequest(BaseModel):
+    student_id: UUID
+    course_id: UUID
+
+
 @router.post("/enrollments")
 async def enroll_user(
-    student_id: UUID,
-    course_id: UUID,
+    request: EnrollmentRequest,
     admin: AdminUser,
     db: AsyncSession = Depends(get_db)
 ):
@@ -662,7 +744,7 @@ async def enroll_user(
     # Verify student and course exist in org
     student = await db.execute(
         select(Student).where(
-            Student.id == student_id,
+            Student.id == request.student_id,
             Student.org_id == admin.org_id
         )
     )
@@ -671,7 +753,7 @@ async def enroll_user(
     
     course = await db.execute(
         select(Course).where(
-            Course.id == course_id,
+            Course.id == request.course_id,
             Course.org_id == admin.org_id
         )
     )
@@ -681,14 +763,14 @@ async def enroll_user(
     # Check if already enrolled
     existing = await db.execute(
         select(Enrollment).where(
-            Enrollment.student_id == student_id,
-            Enrollment.course_id == course_id
+            Enrollment.student_id == request.student_id,
+            Enrollment.course_id == request.course_id
         )
     )
     if existing.scalars().first():
         raise HTTPException(status_code=400, detail="Already enrolled")
     
-    enrollment = Enrollment(student_id=student_id, course_id=course_id)
+    enrollment = Enrollment(student_id=request.student_id, course_id=request.course_id)
     db.add(enrollment)
     await db.commit()
     

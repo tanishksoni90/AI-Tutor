@@ -17,6 +17,7 @@ Design:
 - LLM invocation is isolated
 - Response shaping enforces academic integrity
 """
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ import google.generativeai as genai
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
-from src.db.models import DocumentChunk
+from src.db.models import DocumentChunk, QueryAnalytics
 from src.db.repository.document import DocumentChunkRepository
 from src.services.retrieval import RetrievalResult, RetrievedChunk
 
@@ -397,7 +398,7 @@ class SelfReflectiveTutorService(TutorService):
         if not can_answer:
             is_assignment_question = self._detect_assignment_question(request.question)
             response_time_ms = int((time.time() - start_time) * 1000)
-            return TutorResponse(
+            no_context_response = TutorResponse(
                 answer="I don't have enough information in the course materials to answer this question confidently. Could you rephrase your question or ask about a topic covered in the lectures?",
                 sources=[],
                 was_redirected=is_assignment_question,
@@ -406,6 +407,9 @@ class SelfReflectiveTutorService(TutorService):
                 confidence_score=0,
                 response_time_ms=response_time_ms
             )
+            # Log analytics even for no_context responses (was_hallucination=True since no valid answer)
+            await self._log_analytics(request, no_context_response, was_hallucination=True)
+            return no_context_response
         
         # 5. Validation passed - generate the answer using requested response mode
         prompt = self._build_prompt(request.question, context)
@@ -436,7 +440,7 @@ class SelfReflectiveTutorService(TutorService):
         # Calculate confidence score based on number of sources and relevance
         confidence_score = min(100, len(sources) * 20) if sources else 50
         
-        return TutorResponse(
+        tutor_response = TutorResponse(
             answer=response,
             sources=sources,
             was_redirected=is_assignment_question,
@@ -445,6 +449,58 @@ class SelfReflectiveTutorService(TutorService):
             confidence_score=confidence_score,
             response_time_ms=response_time_ms
         )
+        
+        # Log analytics for successful response
+        await self._log_analytics(request, tutor_response, was_hallucination=False)
+        
+        return tutor_response
+
+    async def _log_analytics(
+        self,
+        request: TutorRequest,
+        response: TutorResponse,
+        was_hallucination: bool = False
+    ) -> None:
+        """
+        Log query analytics to the database.
+        
+        This captures metadata about the query for analytics purposes,
+        without storing actual question/answer content for privacy.
+        """
+        if not self.enable_analytics:
+            return
+        
+        try:
+            # Extract topic from question (first few words, truncated)
+            words = request.question.split()[:5]
+            query_topic = " ".join(words)[:255] if words else None
+            
+            # Build sources used as JSON list of chunk IDs
+            sources_used = json.dumps([s.get("chunk_id") for s in response.sources]) if response.sources else None
+            
+            analytics = QueryAnalytics(
+                student_id=request.student_id,
+                course_id=request.course_id,
+                session_token=request.session_token,
+                query_topic=query_topic,
+                query_length=len(request.question),
+                response_length=len(response.answer),
+                confidence_score=response.confidence_score,
+                sources_count=len(response.sources),
+                sources_used=sources_used,
+                was_hallucination_detected=was_hallucination,
+                was_assignment_blocked=response.was_redirected,
+                context_messages_count=len(request.context_messages) if request.context_messages else 0,
+                response_time_ms=response.response_time_ms
+            )
+            
+            self.db.add(analytics)
+            await self.db.commit()
+            logger.info(f"Logged analytics for query: topic={query_topic}, confidence={response.confidence_score}")
+        except Exception as e:
+            logger.error(f"Failed to log analytics: {str(e)}")
+            # Don't fail the request if analytics logging fails
+            await self.db.rollback()
 
 
 async def get_tutor_response(
