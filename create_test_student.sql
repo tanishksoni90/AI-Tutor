@@ -1,21 +1,13 @@
 -- Create test student for API testing
--- SECURITY: This script must only run in test/development environments
-
--- Environment guard: Abort if not in test environment
--- This requires setting a psql variable before running:
---   psql -v ALLOW_TEST_DATA=true -f create_test_student.sql
--- Or set APP_ENV to 'test' or 'development'
+-- SAFETY: This script should only run in test environments
 DO $$
 BEGIN
-    -- Check for ALLOW_TEST_DATA flag or test environment
-    IF NOT (
-        current_setting('app.allow_test_data', true) = 'true' OR
-        current_setting('app.env', true) IN ('test', 'development') OR
-        current_setting('server_version', true) LIKE '%test%'
-    ) THEN
-        RAISE EXCEPTION 'ABORTED: This script only runs in test environments. Set app.allow_test_data=true or app.env=test/development';
+    IF current_setting('app.environment', true) IS DISTINCT FROM 'test' 
+       AND NOT coalesce(current_setting('is_test_env', true), 'false')::boolean THEN
+        RAISE EXCEPTION 'This script can only run in test environment. Set app.environment=test or is_test_env=true';
     END IF;
-END $$;
+END
+$$;
 
 INSERT INTO students (id, org_id, username, password_hash, email, first_name, last_name)
 VALUES (
@@ -27,7 +19,7 @@ VALUES (
     'Test',
     'Student'
 )
-ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;
+ON CONFLICT (username) DO NOTHING;
 
 -- Enroll student in test course
 INSERT INTO enrollments (student_id, course_id)

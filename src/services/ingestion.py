@@ -167,14 +167,12 @@ class IngestionService:
             metrics.embeddings_generated = len(embeddings)
             logger.info(f"Generated {len(embeddings)} embeddings")
             
-            # 8. Store in Qdrant (if enabled) and update chunks with embedding_ids
+            # 8. Store in Qdrant and update chunks with embedding_ids
             if settings.USE_QDRANT:
                 await self._store_vectors(chunks, embeddings, request.course_id, request.session_id)
                 logger.info("Vectors stored in Qdrant")
             else:
-                # Even without Qdrant, persist embedding_ids so they're populated in DB
-                await self._persist_embedding_ids(chunks)
-                logger.info("Skipping Qdrant storage (USE_QDRANT=False), embedding_ids still persisted")
+                logger.info("Skipping Qdrant storage (USE_QDRANT=False)")
             
             metrics.success = True
             logger.info(f"Ingestion complete: {metrics}")
@@ -267,16 +265,6 @@ class IngestionService:
         
         # Update chunks with embedding_id
         await self.chunk_repo.update_embedding_ids(chunk_id_to_embedding_id)
-    
-    async def _persist_embedding_ids(self, chunks: List[DocumentChunk]):
-        """
-        Persist embedding_ids to chunks without storing vectors in Qdrant.
-        
-        Used when USE_QDRANT=False to ensure embedding_id is still populated.
-        """
-        chunk_id_to_embedding_id = {chunk.id: chunk.id for chunk in chunks}
-        await self.chunk_repo.update_embedding_ids(chunk_id_to_embedding_id)
-        logger.info(f"Persisted {len(chunks)} embedding_ids to database")
 
 
 async def ingest_document(db: AsyncSession, request: IngestionRequest) -> IngestionMetrics:

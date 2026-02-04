@@ -141,15 +141,15 @@ class RetrievalService:
             session_filter=request.session_filter
         )
         
-        # 4. Search Qdrant
+        # 4. Search Qdrant (using query_points for newer qdrant-client versions)
         client = qdrant_client.get_client()
-        search_result = client.search(
+        search_result = client.query_points(
             collection_name=settings.QDRANT_COLLECTION_NAME,
-            query_vector=query_embedding.vector,
+            query=query_embedding.vector,
             query_filter=qdrant_filter,
             limit=request.top_k,
             with_payload=True
-        )
+        ).points
         
         # 5. Transform results
         chunks = [
@@ -230,7 +230,7 @@ class RetrievalService:
         """
         client = qdrant_client.get_client()
         
-        # Fetch points by ID
+        # Fetch points by ID using client.retrieve() (qdrant-client >= 1.0 returns List[Record])
         points = client.retrieve(
             collection_name=settings.QDRANT_COLLECTION_NAME,
             ids=chunk_ids,

@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate_to_bcrypt_limit(password: str, limit: int = 72) -> str:
+    """
+    Safely truncate password to bcrypt's 72-byte limit.
+    
+    Handles multi-byte UTF-8 characters correctly by encoding to bytes,
+    truncating, and decoding back without breaking characters.
+    """
+    encoded = password.encode('utf-8')
+    if len(encoded) <= limit:
+        return password
+    # Truncate bytes and decode, ignoring incomplete multi-byte sequences
+    return encoded[:limit].decode('utf-8', errors='ignore')
+
+
 class TokenData(BaseModel):
     """Data encoded in JWT token."""
     student_id: UUID
@@ -40,33 +54,15 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
-def _truncate_password_to_bcrypt_limit(password: str) -> str:
-    """
-    Truncate password to bcrypt's 72-byte limit using byte-aware truncation.
-    
-    bcrypt only uses the first 72 bytes of a password. This function ensures
-    consistent truncation by operating on bytes rather than characters, which
-    is important for multi-byte characters (e.g., UTF-8 encoded text).
-    """
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) <= 72:
-        return password
-    # Truncate to 72 bytes and decode safely (ignore incomplete multi-byte chars)
-    truncated_bytes = password_bytes[:72]
-    return truncated_bytes.decode('utf-8', errors='ignore')
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    # bcrypt has a 72 byte limit, truncate if needed using byte-aware truncation
-    truncated_password = _truncate_password_to_bcrypt_limit(plain_password)
+    truncated_password = _truncate_to_bcrypt_limit(plain_password)
     return pwd_context.verify(truncated_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    # bcrypt has a 72 byte limit, truncate if needed using byte-aware truncation
-    truncated_password = _truncate_password_to_bcrypt_limit(password)
+    truncated_password = _truncate_to_bcrypt_limit(password)
     return pwd_context.hash(truncated_password)
 
 

@@ -5,27 +5,18 @@ Usage:
     USE_LOCAL_EMBEDDINGS=true USE_SQLITE=true USE_QDRANT=false \
         poetry run python scripts/batch_ingest_course.py
 
-    # With custom data folder:
-    USE_LOCAL_EMBEDDINGS=true USE_SQLITE=true USE_QDRANT=false \
-        poetry run python scripts/batch_ingest_course.py --data-folder /path/to/data
-
-    # Or via environment variable:
-    DATA_FOLDER=/path/to/data poetry run python scripts/batch_ingest_course.py
-
 Features:
 - Auto-detects Pre-read, Post-read, Session Deck from filenames
 - Creates course with proper metadata
 - Processes all PDFs sequentially
 - Progress tracking and error handling
 """
-import argparse
 import asyncio
 import sys
 import os
 import re
 from pathlib import Path
-from typing import List, Dict, Union, Any
-from typing_extensions import TypedDict
+from typing import List, Dict, Any
 import uuid
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -40,20 +31,11 @@ from src.services.ingestion import IngestionService, IngestionRequest
 # Course metadata
 COURSE_NAME = "NextGen - AI Masterclass (Bengali #901)"
 COURSE_TYPE = "certification"  # Large course with 20+ sessions
-DEFAULT_DATA_FOLDER = os.path.join(os.path.dirname(__file__), '..', 'data')
+# Use environment variable with fallback to project-relative path
+DATA_FOLDER = os.environ.get('DATA_FOLDER', os.path.join(os.path.dirname(__file__), '..', 'data'))
 
 
-class ParsedFilename(TypedDict):
-    """Type definition for parsed filename metadata."""
-    filename: str
-    file_id: str
-    title: str
-    content_type: str
-    session_id: str
-    assignment_allowed: bool
-
-
-def parse_filename(filename: str) -> ParsedFilename:
+def parse_filename(filename: str) -> Dict[str, Any]:
     """
     Parse PDF filename to extract metadata.
     
@@ -161,7 +143,7 @@ async def ingest_pdf(
             'slides': metrics.slides_extracted,
             'chunks': metrics.chunks_created,
             'embeddings': metrics.embeddings_generated,
-            'error': metrics.error or ""
+            'error': metrics.error
         }
     except Exception as e:
         return {
@@ -171,32 +153,15 @@ async def ingest_pdf(
         }
 
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Batch ingest all PDFs from a course folder."
-    )
-    parser.add_argument(
-        "--data-folder",
-        type=str,
-        default=os.environ.get("DATA_FOLDER", DEFAULT_DATA_FOLDER),
-        help="Path to the data folder containing PDF files (default: DATA_FOLDER env var or ./data)"
-    )
-    return parser.parse_args()
-
-
 async def main():
-    args = parse_args()
-    data_folder = args.data_folder
-    
     print("=" * 80)
     print(f"BATCH COURSE INGESTION: {COURSE_NAME}")
     print("=" * 80)
     
     # 1. Scan data folder
-    data_path = Path(data_folder)
+    data_path = Path(DATA_FOLDER)
     if not data_path.exists():
-        print(f"ERROR: Data folder not found: {data_folder}")
+        print(f"ERROR: Data folder not found: {DATA_FOLDER}")
         return
     
     pdf_files = sorted(data_path.glob("*.pdf"))
@@ -246,8 +211,8 @@ async def main():
         if result['success']:
             print(f"  ✅ {result['slides']} slides → {result['chunks']} chunks → {result['embeddings']} embeddings")
         else:
-            error_msg = result.get('error') or "No error message available"
-            print(f"  ❌ ERROR: {error_msg[:100]}")
+            error_text = (result.get('error') or 'Unknown error')[:100]
+            print(f"  ❌ ERROR: {error_text}")
     
     # 5. Summary
     print(f"\n{'='*80}")
@@ -271,8 +236,8 @@ async def main():
     if failed:
         print(f"\n❌ Failed files:")
         for r in failed:
-            error_msg = r.get('error') or "No error message available"
-            print(f"  - {r['filename']}: {error_msg[:80]}")
+            error_preview = (r.get('error') or 'Unknown error')[:80]
+            print(f"  - {r['filename']}: {error_preview}")
     
     print(f"\n{'='*80}")
     print(f"Course ID: {course_id}")

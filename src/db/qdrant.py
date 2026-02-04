@@ -20,7 +20,6 @@ class VectorDBClient:
     def ensure_collection_exists(self):
         """
         Checks if the collection exists. If not, creates it with the correct schema.
-        If the collection exists, validates that the vector dimension matches.
         """
         try:
             collections = self.client.get_collections()
@@ -66,22 +65,16 @@ class VectorDBClient:
                 
                 logger.info("Collection and indexes created successfully.")
             else:
-                # Collection exists - validate vector dimension matches
+                # Validate that existing collection has correct vector dimension
                 collection_info = self.client.get_collection(self.collection_name)
-                existing_vector_size = collection_info.config.params.vectors.size
-                
-                if existing_vector_size != self.vector_size:
-                    error_msg = (
-                        f"Vector dimension mismatch for collection '{self.collection_name}': "
-                        f"existing collection has {existing_vector_size} dimensions, "
-                        f"but current configuration expects {self.vector_size} dimensions. "
-                        f"This can occur when switching between embedding models. "
-                        f"Please delete the existing collection or update the embedding configuration."
+                existing_dim = collection_info.config.params.vectors.size
+                if existing_dim != self.vector_size:
+                    raise ValueError(
+                        f"Collection '{self.collection_name}' exists with vector dimension {existing_dim}, "
+                        f"but current embedding config expects {self.vector_size}. "
+                        f"Please delete the collection or update embedding configuration."
                     )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
-                logger.info(f"Collection {self.collection_name} already exists with matching vector size ({self.vector_size}).")
+                logger.info(f"Collection {self.collection_name} already exists with matching dimension {existing_dim}.")
                 
         except Exception as e:
             logger.error(f"Failed to initialize Qdrant: {str(e)}")
