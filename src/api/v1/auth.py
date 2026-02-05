@@ -5,7 +5,10 @@ Endpoints:
 - POST /auth/login - Login and get JWT token
 - POST /auth/register - Register new user (admin only)
 - GET /auth/me - Get current user info
+- GET /auth/validate-invitation - Check if invitation token is valid
+- POST /auth/accept-invitation - Accept invitation and set password
 """
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field
@@ -13,10 +16,11 @@ from pydantic import BaseModel, EmailStr, Field
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from src.db.session import get_db
-from src.db.models import StudentRole
-from src.services.auth import AuthService, Token
+from src.db.models import Student, StudentRole, InvitationStatus, Course, Enrollment
+from src.services.auth import AuthService, Token, get_password_hash
 from src.api.deps import CurrentUser, AdminUser
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -124,3 +128,114 @@ async def get_current_user_info(current_user: CurrentUser):
         role=current_user.role,
         is_active=current_user.is_active
     )
+
+
+# ==================== Invitation Endpoints ====================
+
+class InvitationInfoResponse(BaseModel):
+    """Info about a pending invitation."""
+    email: str
+    full_name: Optional[str]
+    courses: list[str]
+    expires_at: datetime
+
+
+class AcceptInvitationRequest(BaseModel):
+    """Request to accept invitation and set password."""
+    token: str
+    password: str = Field(..., min_length=8)
+
+
+@router.get("/validate-invitation/{token}")
+async def validate_invitation(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Validate an invitation token and return user info.
+    
+    This is a public endpoint - no authentication required.
+    Used by the set-password page to verify token before showing form.
+    """
+    result = await db.execute(
+        select(Student).where(
+            Student.invitation_token == token,
+            Student.invitation_status == InvitationStatus.PENDING.value
+        )
+    )
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid or expired invitation token"
+        )
+    
+    # Check if expired
+    if user.invitation_expires_at and user.invitation_expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invitation has expired. Please contact admin for a new invitation."
+        )
+    
+    # Get enrolled courses
+    courses_result = await db.execute(
+        select(Course.name)
+        .join(Enrollment, Enrollment.course_id == Course.id)
+        .where(Enrollment.student_id == user.id)
+    )
+    courses = [c for c in courses_result.scalars().all()]
+    
+    return InvitationInfoResponse(
+        email=user.email,
+        full_name=user.full_name,
+        courses=courses,
+        expires_at=user.invitation_expires_at
+    )
+
+
+@router.post("/accept-invitation", response_model=Token)
+async def accept_invitation(
+    request: AcceptInvitationRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Accept invitation and set password.
+    
+    This is a public endpoint - no authentication required.
+    After setting password, returns a JWT token so user is auto-logged in.
+    """
+    result = await db.execute(
+        select(Student).where(
+            Student.invitation_token == request.token,
+            Student.invitation_status == InvitationStatus.PENDING.value
+        )
+    )
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid or expired invitation token"
+        )
+    
+    # Check if expired
+    if user.invitation_expires_at and user.invitation_expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invitation has expired. Please contact admin for a new invitation."
+        )
+    
+    # Set password and activate account
+    user.hashed_password = get_password_hash(request.password)
+    user.invitation_status = InvitationStatus.ACTIVE.value
+    user.invitation_token = None  # Clear token (single-use)
+    user.invitation_expires_at = None
+    user.is_active = True
+    
+    await db.commit()
+    await db.refresh(user)
+    
+    # Return JWT token so user is auto-logged in
+    auth_service = AuthService(db)
+    return auth_service.create_token_for_user(user)

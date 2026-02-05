@@ -55,6 +55,20 @@ interface DocumentData {
   created_at: string;
 }
 
+interface ChunkData {
+  id: string;
+  document_id: string;
+  course_id: string;
+  session_id: string | null;
+  chunk_index: number;
+  text: string;
+  assignment_allowed: boolean;
+  slide_number: number | null;
+  slide_title: string | null;
+  embedding_id: string | null;
+  created_at: string;
+}
+
 const contentTypeColors: Record<string, string> = {
   slide: 'bg-blue-500/20 text-blue-500',
   pre_read: 'bg-green-500/20 text-green-500',
@@ -73,6 +87,17 @@ function AdminDocumentsContent() {
   const [isIngesting, setIsIngesting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Chunks dialog state
+  const [isChunksDialogOpen, setIsChunksDialogOpen] = useState(false);
+  const [selectedDocument, setSelectedDocument] = useState<DocumentData | null>(null);
+  const [chunks, setChunks] = useState<ChunkData[]>([]);
+  const [isLoadingChunks, setIsLoadingChunks] = useState(false);
+  
+  // Delete confirmation state
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [documentToDelete, setDocumentToDelete] = useState<DocumentData | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   
   const [uploadForm, setUploadForm] = useState({
     course_id: '',
@@ -134,38 +159,69 @@ function AdminDocumentsContent() {
 
     setIsIngesting(true);
     try {
-      // In a real app, you'd upload the file first, then call ingest
-      await api.ingestDocument({
-        course_id: uploadForm.course_id,
-        title: uploadForm.title,
-        source_uri: `/uploads/${selectedFile.name}`, // Mock path
-        content_type: uploadForm.content_type as 'slide' | 'pre_read' | 'post_read' | 'quiz' | 'transcript',
-        session_id: uploadForm.session_id || undefined,
-        assignment_allowed: true,
-      });
+      // Upload file and ingest in one request
+      const result = await api.uploadAndIngestDocument(
+        selectedFile,
+        uploadForm.course_id,
+        uploadForm.title,
+        uploadForm.content_type as 'slide' | 'pre_read' | 'post_read' | 'quiz' | 'transcript',
+        uploadForm.session_id || undefined,
+        true  // assignment_allowed
+      );
       
       toast.success('Document ingested successfully', {
-        description: 'The document has been processed and is ready for use'
+        description: `Created ${result.chunks_created} chunks with ${result.embeddings_generated} embeddings`
       });
       
       setIsUploadDialogOpen(false);
       setSelectedFile(null);
       setUploadForm({ course_id: '', title: '', content_type: 'slide', session_id: '' });
       loadDocuments();
-    } catch (error) {
-      toast.error('Failed to ingest document');
+    } catch (error: any) {
+      toast.error('Failed to ingest document', {
+        description: error.message || 'Check the server logs for details'
+      });
     } finally {
       setIsIngesting(false);
     }
   };
 
-  const handleDeleteDocument = async (docId: string) => {
+  const handleViewChunks = async (doc: DocumentData) => {
+    setSelectedDocument(doc);
+    setIsChunksDialogOpen(true);
+    setIsLoadingChunks(true);
     try {
-      await api.deleteDocument(docId);
-      setDocuments(documents.filter(d => d.id !== docId));
-      toast.success('Document deleted');
+      const data = await api.getDocumentChunks(doc.id);
+      setChunks(data);
+    } catch (error) {
+      toast.error('Failed to load chunks');
+      setChunks([]);
+    } finally {
+      setIsLoadingChunks(false);
+    }
+  };
+
+  const handleDeleteClick = (doc: DocumentData) => {
+    setDocumentToDelete(doc);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!documentToDelete) return;
+    
+    setIsDeleting(true);
+    try {
+      const result = await api.deleteDocument(documentToDelete.id);
+      setDocuments(documents.filter(d => d.id !== documentToDelete.id));
+      toast.success('Document deleted', {
+        description: `Removed ${result.deleted_embeddings} embeddings from vector store`
+      });
+      setIsDeleteDialogOpen(false);
+      setDocumentToDelete(null);
     } catch (error) {
       toast.error('Failed to delete document');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -323,13 +379,13 @@ function AdminDocumentsContent() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleViewChunks(doc)}>
                               <Eye className="w-4 h-4 mr-2" />
                               View Chunks
                             </DropdownMenuItem>
                             <DropdownMenuItem 
                               className="text-destructive"
-                              onClick={() => handleDeleteDocument(doc.id)}
+                              onClick={() => handleDeleteClick(doc)}
                             >
                               <Trash2 className="w-4 h-4 mr-2" />
                               Delete Document
@@ -466,6 +522,96 @@ function AdminDocumentsContent() {
                 <>
                   <Upload className="w-4 h-4 mr-2" />
                   Upload & Ingest
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Chunks Dialog */}
+      <Dialog open={isChunksDialogOpen} onOpenChange={setIsChunksDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Document Chunks</DialogTitle>
+            <DialogDescription>
+              {selectedDocument?.title} - {chunks.length} chunks
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-4 py-4">
+            {isLoadingChunks ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : chunks.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">No chunks found</p>
+            ) : (
+              chunks.map((chunk, i) => (
+                <Card key={chunk.id} className="border-border/50">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">#{chunk.chunk_index + 1}</Badge>
+                        {chunk.slide_number && (
+                          <Badge variant="secondary">Slide {chunk.slide_number}</Badge>
+                        )}
+                        {chunk.slide_title && (
+                          <span className="text-sm font-medium text-muted-foreground">
+                            {chunk.slide_title}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {chunk.embedding_id && (
+                          <Badge className="bg-green-500/20 text-green-500">
+                            <Sparkles className="w-3 h-3 mr-1" />
+                            Embedded
+                          </Badge>
+                        )}
+                        {chunk.assignment_allowed && (
+                          <Badge className="bg-blue-500/20 text-blue-500">Assignment</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <pre className="text-sm whitespace-pre-wrap font-mono bg-secondary/30 p-3 rounded-lg max-h-48 overflow-y-auto">
+                      {chunk.text}
+                    </pre>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsChunksDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Document</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete "{documentToDelete?.title}"? This will also remove all {documentToDelete?.chunks_count} chunks and their embeddings from the vector store. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={isDeleting}>
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
                 </>
               )}
             </Button>
