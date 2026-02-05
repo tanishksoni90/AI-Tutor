@@ -77,6 +77,17 @@ const contentTypeColors: Record<string, string> = {
   transcript: 'bg-pink-500/20 text-pink-500',
 };
 
+interface ChunkData {
+  id: string;
+  document_id: string;
+  chunk_index: number;
+  slide_number: number | null;
+  slide_title: string | null;
+  text: string;
+  char_count: number;
+  created_at: string;
+}
+
 function AdminDocumentsContent() {
   const [documents, setDocuments] = useState<DocumentData[]>([]);
   const [courses, setCourses] = useState<{ id: string; name: string }[]>([]);
@@ -94,11 +105,14 @@ function AdminDocumentsContent() {
   const [chunks, setChunks] = useState<ChunkData[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
   
+<<<<<<< HEAD
   // Delete confirmation state
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<DocumentData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   
+=======
+>>>>>>> 4031f2f9 (Admin bugs resolved)
   const [uploadForm, setUploadForm] = useState({
     course_id: '',
     title: '',
@@ -222,6 +236,22 @@ function AdminDocumentsContent() {
       toast.error('Failed to delete document');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleViewChunks = async (doc: DocumentData) => {
+    setSelectedDocument(doc);
+    setIsChunksDialogOpen(true);
+    setIsLoadingChunks(true);
+    try {
+      const data = await api.getDocumentChunks(doc.id);
+      setChunks(data);
+    } catch (error) {
+      console.error('Failed to load chunks:', error);
+      toast.error('Failed to load chunks');
+      setChunks([]);
+    } finally {
+      setIsLoadingChunks(false);
     }
   };
 
@@ -535,6 +565,7 @@ function AdminDocumentsContent() {
           <DialogHeader>
             <DialogTitle>Document Chunks</DialogTitle>
             <DialogDescription>
+<<<<<<< HEAD
               {selectedDocument?.title} - {chunks.length} chunks
             </DialogDescription>
           </DialogHeader>
@@ -578,6 +609,48 @@ function AdminDocumentsContent() {
                     </pre>
                   </CardContent>
                 </Card>
+=======
+              {selectedDocument?.title} — {chunks.length} chunks
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-3 py-4">
+            {isLoadingChunks ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : chunks.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No chunks found for this document
+              </div>
+            ) : (
+              chunks.map((chunk, index) => (
+                <div 
+                  key={chunk.id} 
+                  className="p-4 rounded-lg bg-secondary/30 border border-border/50"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">Chunk {index + 1}</Badge>
+                      {chunk.slide_number && (
+                        <Badge className="bg-blue-500/20 text-blue-500">
+                          Slide {chunk.slide_number}
+                        </Badge>
+                      )}
+                      {chunk.slide_title && (
+                        <span className="text-sm text-muted-foreground">
+                          {chunk.slide_title}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {chunk.char_count} chars
+                    </span>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap line-clamp-4">
+                    {chunk.text}
+                  </p>
+                </div>
+>>>>>>> 4031f2f9 (Admin bugs resolved)
               ))
             )}
           </div>
@@ -588,6 +661,7 @@ function AdminDocumentsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+<<<<<<< HEAD
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
@@ -618,6 +692,8 @@ function AdminDocumentsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+=======
+>>>>>>> 4031f2f9 (Admin bugs resolved)
     </div>
   );
 }

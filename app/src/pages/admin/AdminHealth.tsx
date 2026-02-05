@@ -144,7 +144,7 @@ function AdminHealthContent() {
   };
 
   const allHealthy = health && 
-    health.status === 'healthy' &&
+    (health.status === 'healthy' || health.status === 'ok') &&
     health.dependencies.postgresql.status === 'healthy' &&
     health.dependencies.qdrant.status === 'healthy' &&
     (health.dependencies.gemini_api.status === 'configured' || health.dependencies.gemini_api.status === 'healthy');

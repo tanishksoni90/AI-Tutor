@@ -130,12 +130,24 @@ function QuickAction({
   );
 }
 
+interface Activity {
+  id: string;
+  activity_type: string;
+  actor_email: string;
+  target_name: string;
+  created_at: string;
+  action_text: string;
+  time_ago: string;
+}
+
 function AdminOverviewContent() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     loadStats();
+    loadActivities();
   }, []);
 
   const loadStats = async () => {
@@ -158,6 +170,28 @@ function AdminOverviewContent() {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadActivities = async () => {
+    try {
+      const data = await api.getActivities(6);
+      setActivities(data);
+    } catch (error) {
+      console.error('Failed to load activities:', error);
+      setActivities([]);
+    }
+  };
+
+  const getActivityColor = (type: string) => {
+    switch (type) {
+      case 'user_registered': return 'bg-blue-500';
+      case 'document_uploaded': return 'bg-green-500';
+      case 'course_created': return 'bg-purple-500';
+      case 'user_enrolled': return 'bg-amber-500';
+      case 'query_asked': return 'bg-cyan-500';
+      case 'admin_login': return 'bg-pink-500';
+      default: return 'bg-gray-500';
     }
   };
 
@@ -334,25 +368,23 @@ function AdminOverviewContent() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {[
-                { action: 'New user registered', user: 'john.doe@example.com', time: '5 minutes ago', type: 'user' },
-                { action: 'Document uploaded', user: 'admin@career247.com', time: '15 minutes ago', type: 'document' },
-                { action: 'Course created', user: 'admin@career247.com', time: '1 hour ago', type: 'course' },
-                { action: 'User enrolled', user: 'jane.smith@example.com', time: '2 hours ago', type: 'enrollment' },
-              ].map((activity, i) => (
-                <div key={i} className="flex items-center gap-4 p-3 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors">
-                  <div className={`w-2 h-2 rounded-full ${
-                    activity.type === 'user' ? 'bg-blue-500' :
-                    activity.type === 'document' ? 'bg-green-500' :
-                    activity.type === 'course' ? 'bg-purple-500' : 'bg-amber-500'
-                  }`} />
-                  <div className="flex-1">
-                    <p className="font-medium">{activity.action}</p>
-                    <p className="text-sm text-muted-foreground">{activity.user}</p>
+              {activities.length > 0 ? (
+                activities.map((activity) => (
+                  <div key={activity.id} className="flex items-center gap-4 p-3 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors">
+                    <div className={`w-2 h-2 rounded-full ${getActivityColor(activity.activity_type)}`} />
+                    <div className="flex-1">
+                      <p className="font-medium">{activity.action_text}</p>
+                      <p className="text-sm text-muted-foreground">{activity.actor_email || 'System'}</p>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{activity.time_ago}</p>
                   </div>
-                  <p className="text-sm text-muted-foreground">{activity.time}</p>
+                ))
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Activity className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No recent activity</p>
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
