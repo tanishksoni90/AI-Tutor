@@ -198,3 +198,31 @@ class QueryAnalytics(Base):
     # Relationships
     student = relationship("Student", back_populates="query_analytics")
     course = relationship("Course", back_populates="query_analytics")
+
+
+class ActivityType(str, enum.Enum):
+    USER_REGISTERED = "user_registered"
+    USER_INVITED = "user_invited"
+    DOCUMENT_UPLOADED = "document_uploaded"
+    COURSE_CREATED = "course_created"
+    USER_ENROLLED = "user_enrolled"
+    QUERY_ASKED = "query_asked"
+    ADMIN_LOGIN = "admin_login"
+
+
+class ActivityLog(Base):
+    """
+    Activity log for tracking platform events.
+    Used for admin dashboard recent activity feed.
+    """
+    __tablename__ = "activity_logs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(), ForeignKey("orgs.id"), nullable=False)
+    activity_type = Column(String, nullable=False)
+    actor_email = Column(String, nullable=True)  # Who performed the action
+    target_name = Column(String, nullable=True)  # What was affected (user email, doc title, course name)
+    extra_data = Column(Text, nullable=True)  # JSON for extra details
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    org = relationship("Org")

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
+from src.db.models import ActivityLog, ActivityType
 from src.api.deps import AdminUser
 from src.services.ingestion import IngestionService, IngestionRequest
 
@@ -242,6 +243,17 @@ async def ingest_document(
         )
         
         metrics = await service.ingest(ingestion_request)
+        
+        # Log the activity if successful
+        if metrics.success:
+            activity = ActivityLog(
+                org_id=admin.org_id,
+                activity_type=ActivityType.DOCUMENT_UPLOADED.value,
+                actor_email=admin.email,
+                target_name=request.title
+            )
+            db.add(activity)
+            await db.commit()
         
         return IngestResponse(
             document_id=metrics.document_id,
