@@ -16,7 +16,7 @@ from sqlalchemy import select, func, desc, delete
 from src.db.session import get_db
 from src.db.models import (
     Student, StudentRole, Course, CourseType, Document, 
-    DocumentChunk, Enrollment, Org, QueryAnalytics, InvitationStatus
+    DocumentChunk, Enrollment, Org, QueryAnalytics, InvitationStatus, ActivityLog, ActivityType
 )
 from src.api.deps import AdminUser
 from src.services.auth import get_password_hash
@@ -42,7 +42,7 @@ class UserCreateRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
-    org_id: UUID
+    org_id: Optional[UUID] = None  # Ignored - uses admin's org_id for security
     role: str = Field(default="student", pattern="^(student|admin)$")
 
 
@@ -112,6 +112,77 @@ class DashboardStats(BaseModel):
     total_queries: int
     queries_today: int
     active_users_today: int
+
+
+class ActivityResponse(BaseModel):
+    id: UUID
+    activity_type: str
+    actor_email: Optional[str]
+    target_name: Optional[str]
+    created_at: datetime
+    
+    # Computed fields for display
+    action_text: str
+    time_ago: str
+
+
+# ==================== Helper Functions ====================
+
+async def log_activity(
+    db: AsyncSession,
+    org_id: UUID,
+    activity_type: str,
+    actor_email: Optional[str] = None,
+    target_name: Optional[str] = None,
+    extra_data: Optional[str] = None
+):
+    """Log an activity to the activity_logs table."""
+    import uuid as uuid_module
+    activity = ActivityLog(
+        id=uuid_module.uuid4(),
+        org_id=org_id,
+        activity_type=activity_type,
+        actor_email=actor_email,
+        target_name=target_name,
+        extra_data=extra_data
+    )
+    db.add(activity)
+    await db.commit()  # Commit the activity log
+
+
+def get_time_ago(dt: datetime) -> str:
+    """Convert datetime to human-readable 'time ago' string."""
+    now = datetime.utcnow()
+    diff = now - dt.replace(tzinfo=None) if dt.tzinfo else now - dt
+    
+    seconds = diff.total_seconds()
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} hour{'s' if hours > 1 else ''} ago"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days} day{'s' if days > 1 else ''} ago"
+    else:
+        return dt.strftime("%b %d, %Y")
+
+
+def get_action_text(activity_type: str) -> str:
+    """Get human-readable action text for activity type."""
+    mapping = {
+        "user_registered": "New user registered",
+        "user_invited": "User invited",
+        "document_uploaded": "Document uploaded",
+        "course_created": "Course created",
+        "user_enrolled": "User enrolled in course",
+        "query_asked": "Question asked",
+        "admin_login": "Admin logged in",
+    }
+    return mapping.get(activity_type, activity_type.replace("_", " ").title())
 
 
 # ==================== Dashboard Stats ====================
@@ -204,6 +275,39 @@ async def get_dashboard_stats(
     )
 
 
+# ==================== Activity Feed ====================
+
+@router.get("/activities", response_model=List[ActivityResponse])
+async def get_recent_activities(
+    admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(10, le=50)
+):
+    """Get recent activities for the organization."""
+    query = (
+        select(ActivityLog)
+        .where(ActivityLog.org_id == admin.org_id)
+        .order_by(desc(ActivityLog.created_at))
+        .limit(limit)
+    )
+    
+    result = await db.execute(query)
+    activities = result.scalars().all()
+    
+    return [
+        ActivityResponse(
+            id=activity.id,
+            activity_type=activity.activity_type,
+            actor_email=activity.actor_email,
+            target_name=activity.target_name,
+            created_at=activity.created_at,
+            action_text=get_action_text(activity.activity_type),
+            time_ago=get_time_ago(activity.created_at)
+        )
+        for activity in activities
+    ]
+
+
 # ==================== User Management ====================
 
 @router.get("/users", response_model=List[UserResponse])
@@ -286,6 +390,15 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    
+    # Log the activity
+    await log_activity(
+        db=db,
+        org_id=admin.org_id,
+        activity_type=ActivityType.USER_REGISTERED.value,
+        actor_email=admin.email,
+        target_name=user.email
+    )
     
     return UserResponse(
         id=user.id,
@@ -691,6 +804,15 @@ async def create_course(
     await db.commit()
     await db.refresh(course)
     
+    # Log the activity
+    await log_activity(
+        db=db,
+        org_id=admin.org_id,
+        activity_type=ActivityType.COURSE_CREATED.value,
+        actor_email=admin.email,
+        target_name=course.name
+    )
+    
     return CourseAdminResponse(
         id=course.id,
         name=course.name,
@@ -862,32 +984,27 @@ async def get_document_chunks(
     offset: int = Query(0)
 ):
     """Get all chunks for a specific document."""
-    # First verify the document belongs to admin's org
-    doc_query = (
+    # Verify document belongs to admin's org
+    doc_result = await db.execute(
         select(Document)
         .join(Course, Document.course_id == Course.id)
         .where(Document.id == document_id, Course.org_id == admin.org_id)
     )
-    doc_result = await db.execute(doc_query)
-    document = doc_result.scalar_one_or_none()
-    
+    document = doc_result.scalars().first()
+
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-    
-    # Get chunks for this document
-    chunks_query = (
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Get chunks with pagination
+    chunks_result = await db.execute(
         select(DocumentChunk)
         .where(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.chunk_index)
         .limit(limit)
         .offset(offset)
     )
-    result = await db.execute(chunks_query)
-    chunks = result.scalars().all()
-    
+    chunks = chunks_result.scalars().all()
+
     return [
         DocumentChunkResponse(
             id=chunk.id,
@@ -900,7 +1017,7 @@ async def get_document_chunks(
             slide_number=chunk.slide_number,
             slide_title=chunk.slide_title,
             embedding_id=chunk.embedding_id,
-            created_at=chunk.created_at
+            created_at=chunk.created_at,
         )
         for chunk in chunks
     ]
@@ -912,64 +1029,60 @@ async def delete_document(
     admin: AdminUser,
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a document and all its chunks (also removes from Qdrant)."""
-    from src.db.qdrant import qdrant_client
-    from src.core.config import settings
-    
-    # Verify the document belongs to admin's org
-    doc_query = (
+    """Delete a document and all its chunks from PostgreSQL and Qdrant."""
+    from src.db.qdrant import VectorDBClient
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    # Verify document belongs to admin's org
+    doc_result = await db.execute(
         select(Document)
         .join(Course, Document.course_id == Course.id)
         .where(Document.id == document_id, Course.org_id == admin.org_id)
     )
-    doc_result = await db.execute(doc_query)
-    document = doc_result.scalar_one_or_none()
-    
+    document = doc_result.scalars().first()
+
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-    
-    # Get chunk IDs for Qdrant deletion
-    chunk_ids_query = (
-        select(DocumentChunk.embedding_id)
-        .where(
-            DocumentChunk.document_id == document_id,
-            DocumentChunk.embedding_id.isnot(None)
-        )
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Get chunk IDs for Qdrant cleanup
+    chunks_result = await db.execute(
+        select(DocumentChunk.id).where(DocumentChunk.document_id == document_id)
     )
-    chunk_ids_result = await db.execute(chunk_ids_query)
-    embedding_ids = [str(eid) for eid in chunk_ids_result.scalars().all()]
-    
-    # Delete from Qdrant if enabled
-    if settings.USE_QDRANT and embedding_ids:
+    chunk_ids = [str(row[0]) for row in chunks_result.all()]
+
+    deleted_embeddings = 0
+    if chunk_ids:
         try:
-            from qdrant_client.http import models as qdrant_models
-            qdrant_client.delete(
-                collection_name=settings.QDRANT_COLLECTION_NAME,
-                points_selector=qdrant_models.PointIdsList(
-                    points=embedding_ids
+            qdrant_client = VectorDBClient()
+            qdrant_client.client.delete(
+                collection_name=qdrant_client.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_id",
+                            match=MatchValue(value=str(document_id))
+                        )
+                    ]
                 )
             )
+            deleted_embeddings = len(chunk_ids)
         except Exception as e:
-            # Log but don't fail if Qdrant deletion fails
             import logging
-            logging.error(f"Failed to delete from Qdrant: {e}")
-    
-    # Delete chunks from PostgreSQL
+            logging.warning(f"Failed to delete from Qdrant: {e}")
+
+    # Delete from PostgreSQL
     await db.execute(
         delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
     )
-    
-    # Delete document from PostgreSQL
     await db.execute(
         delete(Document).where(Document.id == document_id)
     )
-    
     await db.commit()
-    
-    return {"message": "Document deleted successfully", "deleted_embeddings": len(embedding_ids)}
+
+    return {
+        "message": f"Document '{document.title}' deleted successfully",
+        "deleted_embeddings": deleted_embeddings
+    }
 
 
 # ==================== Analytics ====================
@@ -1125,22 +1238,24 @@ async def enroll_user(
 ):
     """Enroll a user in a course."""
     # Verify student and course exist in org
-    student = await db.execute(
+    student_result = await db.execute(
         select(Student).where(
             Student.id == request.student_id,
             Student.org_id == admin.org_id
         )
     )
-    if not student.scalars().first():
+    student = student_result.scalars().first()
+    if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     
-    course = await db.execute(
+    course_result = await db.execute(
         select(Course).where(
             Course.id == request.course_id,
             Course.org_id == admin.org_id
         )
     )
-    if not course.scalars().first():
+    course = course_result.scalars().first()
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     
     # Check if already enrolled
@@ -1156,6 +1271,15 @@ async def enroll_user(
     enrollment = Enrollment(student_id=request.student_id, course_id=request.course_id)
     db.add(enrollment)
     await db.commit()
+    
+    # Log the activity
+    await log_activity(
+        db=db,
+        org_id=admin.org_id,
+        activity_type=ActivityType.USER_ENROLLED.value,
+        actor_email=admin.email,
+        target_name=f"{student.email} → {course.name}"
+    )
     
     return {"success": True, "message": "User enrolled successfully"}
 
