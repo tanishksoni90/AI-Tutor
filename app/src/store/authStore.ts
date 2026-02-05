@@ -15,6 +15,7 @@ interface AuthState {
   fetchUser: () => Promise<void>;
   clearError: () => void;
   initAuth: () => Promise<void>;
+  setAuthenticatedUser: (user: User) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -77,6 +78,10 @@ export const useAuthStore = create<AuthState>()(
       },
 
       clearError: () => set({ error: null }),
+
+      setAuthenticatedUser: (user: User) => {
+        set({ user, isAuthenticated: true, isLoading: false, error: null });
+      },
     }),
     {
       name: 'auth-storage',

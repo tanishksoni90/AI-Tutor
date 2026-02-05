@@ -10,6 +10,7 @@ import { StudentRoute, AdminRoute } from '@/components/ProtectedRoute';
 import { Landing } from '@/pages/Landing';
 import { Login } from '@/pages/Login';
 import { AdminLogin } from '@/pages/AdminLogin';
+import { AcceptInvitation } from '@/pages/AcceptInvitation';
 import { Dashboard } from '@/pages/Dashboard';
 import { Courses } from '@/pages/Courses';
 import { ChatHistory } from '@/pages/ChatHistory';
@@ -62,6 +63,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/accept-invitation" element={<AcceptInvitation />} />
             
             {/* Student Protected Routes */}
             <Route path="/dashboard" element={<StudentRoute><Dashboard /></StudentRoute>} />

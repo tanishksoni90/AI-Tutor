@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   Users,
@@ -13,6 +13,14 @@ import {
   Trash2,
   Edit,
   BookOpen,
+  Upload,
+  FileText,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+  Clock,
+  Loader2,
+  Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,6 +62,21 @@ interface UserData {
   is_active: boolean;
   created_at: string;
   courses_count: number;
+  invitation_status?: string;
+}
+
+interface ImportStudent {
+  email: string;
+  full_name?: string;
+  course_name: string;
+}
+
+interface ImportResult {
+  email: string;
+  full_name?: string;
+  course_name: string;
+  status: string;
+  message?: string;
 }
 
 function AdminUsersContent() {
@@ -62,6 +85,12 @@ function AdminUsersContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [importStep, setImportStep] = useState<'upload' | 'preview' | 'result'>('upload');
+  const [importData, setImportData] = useState<ImportStudent[]>([]);
+  const [importResults, setImportResults] = useState<ImportResult[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [newUser, setNewUser] = useState({
     email: '',
     password: '',
@@ -97,6 +126,20 @@ function AdminUsersContent() {
     }
   };
 
+  const handleResendInvitation = async (userId: string) => {
+    try {
+      const response = await api.resendInvitation(userId);
+      // Update the user in the list with new invitation status
+      setUsers(users.map(u => 
+        u.id === userId ? { ...u, invitation_status: 'pending' } : u
+      ));
+      toast.success('Invitation regenerated! Token: ' + response.invitation_token.substring(0, 8) + '...');
+      // In production, this would trigger an email send
+    } catch (error) {
+      toast.error('Failed to resend invitation');
+    }
+  };
+
   const handleDeleteUser = async (userId: string) => {
     try {
       await api.deleteUser(userId);
@@ -117,6 +160,68 @@ function AdminUsersContent() {
     } catch (error) {
       toast.error('Failed to create user');
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const lines = text.split('\n').filter(line => line.trim());
+      
+      // Parse header
+      const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+      const emailIdx = header.findIndex(h => h === 'email');
+      const nameIdx = header.findIndex(h => h === 'full_name' || h === 'name');
+      const courseIdx = header.findIndex(h => h === 'course_name' || h === 'course');
+
+      if (emailIdx === -1 || courseIdx === -1) {
+        toast.error('CSV must have "email" and "course_name" columns');
+        return;
+      }
+
+      // Parse data rows
+      const students: ImportStudent[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+        if (values[emailIdx]) {
+          students.push({
+            email: values[emailIdx],
+            full_name: nameIdx !== -1 ? values[nameIdx] : undefined,
+            course_name: values[courseIdx],
+          });
+        }
+      }
+
+      setImportData(students);
+      setImportStep('preview');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImport = async () => {
+    setIsImporting(true);
+    try {
+      const result = await api.bulkImportStudents(importData);
+      setImportResults(result.students);
+      setImportStep('result');
+      loadUsers(); // Refresh user list
+      toast.success(`Imported ${result.created} new students, ${result.existing} existing`);
+    } catch (error) {
+      toast.error('Failed to import students');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const resetImportDialog = () => {
+    setImportStep('upload');
+    setImportData([]);
+    setImportResults([]);
+    setIsImportDialogOpen(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const filteredUsers = users.filter(user => {
@@ -154,10 +259,16 @@ function AdminUsersContent() {
               <p className="text-muted-foreground">{users.length} users in your organization</p>
             </div>
           </div>
-          <Button onClick={() => setIsAddDialogOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add User
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />
+              Import CSV
+            </Button>
+            <Button onClick={() => setIsAddDialogOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add User
+            </Button>
+          </div>
         </div>
       </motion.div>
 
@@ -265,16 +376,25 @@ function AdminUsersContent() {
                         </div>
                       </td>
                       <td className="p-4">
-                        <Badge 
-                          variant={user.is_active ? 'default' : 'secondary'}
-                          className={user.is_active ? 'bg-green-500/20 text-green-500 hover:bg-green-500/30' : ''}
-                        >
-                          {user.is_active ? (
-                            <><UserCheck className="w-3 h-3 mr-1" /> Active</>
-                          ) : (
-                            <><UserX className="w-3 h-3 mr-1" /> Inactive</>
-                          )}
-                        </Badge>
+                        {user.invitation_status === 'pending' ? (
+                          <Badge 
+                            variant="outline"
+                            className="bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
+                          >
+                            <Clock className="w-3 h-3 mr-1" /> Pending Invite
+                          </Badge>
+                        ) : (
+                          <Badge 
+                            variant={user.is_active ? 'default' : 'secondary'}
+                            className={user.is_active ? 'bg-green-500/20 text-green-500 hover:bg-green-500/30' : ''}
+                          >
+                            {user.is_active ? (
+                              <><UserCheck className="w-3 h-3 mr-1" /> Active</>
+                            ) : (
+                              <><UserX className="w-3 h-3 mr-1" /> Inactive</>
+                            )}
+                          </Badge>
+                        )}
                       </td>
                       <td className="p-4 text-muted-foreground">
                         {new Date(user.created_at).toLocaleDateString()}
@@ -291,6 +411,12 @@ function AdminUsersContent() {
                               <Edit className="w-4 h-4 mr-2" />
                               Edit User
                             </DropdownMenuItem>
+                            {user.invitation_status === 'pending' && (
+                              <DropdownMenuItem onClick={() => handleResendInvitation(user.id)}>
+                                <Send className="w-4 h-4 mr-2" />
+                                Resend Invitation
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem onClick={() => handleToggleStatus(user.id)}>
                               {user.is_active ? (
                                 <><UserX className="w-4 h-4 mr-2" /> Deactivate</>
@@ -378,6 +504,163 @@ function AdminUsersContent() {
               Create User
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import CSV Dialog */}
+      <Dialog open={isImportDialogOpen} onOpenChange={(open) => !open && resetImportDialog()}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {importStep === 'upload' && 'Import Students from CSV'}
+              {importStep === 'preview' && 'Preview Import Data'}
+              {importStep === 'result' && 'Import Results'}
+            </DialogTitle>
+            <DialogDescription>
+              {importStep === 'upload' && 'Upload a CSV file with student emails and course assignments'}
+              {importStep === 'preview' && `Review ${importData.length} students before importing`}
+              {importStep === 'result' && 'Import completed - review the results below'}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {importStep === 'upload' && (
+            <div className="space-y-4 py-4">
+              <div 
+                className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={handleFileSelect}
+                />
+                <Upload className="w-10 h-10 mx-auto mb-2 text-muted-foreground" />
+                <p className="font-medium">Click to upload CSV</p>
+                <p className="text-sm text-muted-foreground">or drag and drop</p>
+              </div>
+              <div className="bg-secondary/50 rounded-lg p-4">
+                <p className="font-medium text-sm mb-2">CSV Format Required:</p>
+                <code className="text-xs bg-background px-2 py-1 rounded block">
+                  email,full_name,course_name<br/>
+                  john@email.com,John Doe,Data Structures<br/>
+                  jane@email.com,Jane Smith,Machine Learning
+                </code>
+              </div>
+            </div>
+          )}
+
+          {importStep === 'preview' && (
+            <div className="space-y-4 py-4">
+              <div className="max-h-64 overflow-y-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary sticky top-0">
+                    <tr>
+                      <th className="text-left p-2">Email</th>
+                      <th className="text-left p-2">Name</th>
+                      <th className="text-left p-2">Course</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importData.map((student, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="p-2">{student.email}</td>
+                        <td className="p-2">{student.full_name || '-'}</td>
+                        <td className="p-2">{student.course_name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setImportStep('upload')}>
+                  Back
+                </Button>
+                <Button onClick={handleImport} disabled={isImporting}>
+                  {isImporting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    `Import ${importData.length} Students`
+                  )}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+
+          {importStep === 'result' && (
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="bg-green-500/10 rounded-lg p-3">
+                  <CheckCircle className="w-6 h-6 text-green-500 mx-auto mb-1" />
+                  <p className="text-lg font-bold text-green-500">
+                    {importResults.filter(r => r.status === 'created').length}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Created</p>
+                </div>
+                <div className="bg-amber-500/10 rounded-lg p-3">
+                  <AlertCircle className="w-6 h-6 text-amber-500 mx-auto mb-1" />
+                  <p className="text-lg font-bold text-amber-500">
+                    {importResults.filter(r => r.status === 'existing' || r.status === 'enrolled').length}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Existing</p>
+                </div>
+                <div className="bg-red-500/10 rounded-lg p-3">
+                  <XCircle className="w-6 h-6 text-red-500 mx-auto mb-1" />
+                  <p className="text-lg font-bold text-red-500">
+                    {importResults.filter(r => r.status === 'error').length}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Errors</p>
+                </div>
+              </div>
+              <div className="max-h-48 overflow-y-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary sticky top-0">
+                    <tr>
+                      <th className="text-left p-2">Email</th>
+                      <th className="text-left p-2">Status</th>
+                      <th className="text-left p-2">Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importResults.map((result, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="p-2">{result.email}</td>
+                        <td className="p-2">
+                          <Badge variant={
+                            result.status === 'created' ? 'default' :
+                            result.status === 'error' ? 'destructive' : 'secondary'
+                          }>
+                            {result.status}
+                          </Badge>
+                        </td>
+                        <td className="p-2 text-muted-foreground">{result.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+                <div className="flex items-start gap-2">
+                  <Clock className="w-5 h-5 text-blue-500 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-blue-500">Pending Invitations</p>
+                    <p className="text-sm text-muted-foreground">
+                      New students are in "pending" status. Send invitation emails from User Management to let them set their passwords.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button onClick={resetImportDialog}>
+                  Done
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

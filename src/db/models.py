@@ -83,6 +83,12 @@ class StudentRole(str, enum.Enum):
     ADMIN = "admin"
 
 
+class InvitationStatus(str, enum.Enum):
+    ACTIVE = "active"  # Normal account, no pending invitation
+    PENDING = "pending"  # Invitation sent, waiting for password setup
+    EXPIRED = "expired"  # Invitation expired
+
+
 class Student(Base):
     __tablename__ = "students"
 
@@ -90,10 +96,15 @@ class Student(Base):
     org_id = Column(UUID(), ForeignKey("orgs.id"), nullable=False)
     email = Column(String, unique=True, nullable=False)
     full_name = Column(String, nullable=True)
-    hashed_password = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=True)  # Nullable for pending invitations
     role = Column(String, default=StudentRole.STUDENT.value, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Invitation fields
+    invitation_token = Column(String(64), unique=True, nullable=True)
+    invitation_status = Column(String, default=InvitationStatus.ACTIVE.value, nullable=False)
+    invitation_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     org = relationship("Org", back_populates="students")
     enrollments = relationship("Enrollment", back_populates="student")

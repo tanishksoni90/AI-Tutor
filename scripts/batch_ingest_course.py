@@ -28,8 +28,8 @@ from src.db.repository.org import OrgRepository
 from src.services.ingestion import IngestionService, IngestionRequest
 
 
-# Course metadata
-COURSE_NAME = "NextGen - AI Masterclass (Bengali #901)"
+# Course metadata - can be overridden via environment variables
+COURSE_NAME = os.environ.get('COURSE_NAME', "NextGen-Skills(Bengali-#901)")
 COURSE_TYPE = "certification"  # Large course with 20+ sessions
 # Use environment variable with fallback to project-relative path
 DATA_FOLDER = os.environ.get('DATA_FOLDER', os.path.join(os.path.dirname(__file__), '..', 'data'))
@@ -85,16 +85,19 @@ async def get_or_create_course(session) -> uuid.UUID:
     org_repo = OrgRepository(Org, session)
     course_repo = CourseRepository(Course, session)
     
-    # Use test org
-    test_org_id = uuid.UUID('00000000-0000-0000-0000-000000000001')
-    org = await org_repo.get(test_org_id)
+    # Get first org dynamically (don't use hardcoded ID)
+    from sqlalchemy import select
+    result = await session.execute(select(Org))
+    org = result.scalar()
     
     if not org:
-        print("ERROR: Test org not found. Run setup_test_db.py first")
+        print("ERROR: No org found in database. Run migrations and setup first.")
         sys.exit(1)
     
+    print(f"Using org: {org.name} (ID: {org.id})")
+    
     # Check if course exists
-    courses = await course_repo.get_by_org(test_org_id)
+    courses = await course_repo.get_by_org(org.id)
     for course in courses:
         if course.name == COURSE_NAME:
             print(f"Using existing course: {course.name} (ID: {course.id})")
@@ -103,7 +106,7 @@ async def get_or_create_course(session) -> uuid.UUID:
     # Create new course
     course = Course(
         id=uuid.uuid4(),
-        org_id=test_org_id,
+        org_id=org.id,
         name=COURSE_NAME,
         course_type=COURSE_TYPE,
         total_sessions=0,
