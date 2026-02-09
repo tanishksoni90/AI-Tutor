@@ -23,7 +23,7 @@ interface SettingsState {
 }
 
 const defaultSettings = {
-  theme: 'dark' as Theme,
+  theme: 'light' as Theme,
   enableValidation: true,
   defaultTopK: 5,
   enableNotifications: true,
