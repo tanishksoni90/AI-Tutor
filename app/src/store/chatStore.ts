@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ChatMessage, ChatSession } from '@/types';
+import type { ChatMessage, ChatSession, StreamMetadata, StreamDone } from '@/types';
 import { api } from '@/lib/api';
 
 /**
@@ -13,6 +13,11 @@ import { api } from '@/lib/api';
  * The backend stores analytics (topic, confidence) but NOT conversation text.
  * 
  * On page refresh/close: Messages are cleared (short-term only).
+ * 
+ * STREAMING SUPPORT:
+ * - Messages are streamed progressively for better UX
+ * - Metadata (sources, confidence) arrives first
+ * - Text chunks are appended in real-time
  */
 
 // Maximum messages to keep for context (short-term memory)
@@ -36,6 +41,8 @@ interface ChatState {
   // Actions
   createSession: (courseId: string) => string;
   addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
+  updateMessageContent: (sessionId: string, messageId: string, update: Partial<ChatMessage>) => void;
+  appendMessageChunk: (sessionId: string, messageId: string, chunk: string) => void;
   sendMessage: (courseId: string, question: string, sessionFilter?: string, responseMode?: 'strict' | 'enhanced') => Promise<void>;
   setCurrentSession: (session: ChatSession | null) => void;
   clearSessions: () => void;
@@ -104,6 +111,60 @@ export const useChatStore = create<ChatState>()(
               }
             : state.currentSession,
         }));
+        
+        return message.id;
+      },
+
+      updateMessageContent: (sessionId: string, messageId: string, update: Partial<ChatMessage>) => {
+        set((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === sessionId
+              ? {
+                  ...session,
+                  messages: session.messages.map((msg) =>
+                    msg.id === messageId ? { ...msg, ...update } : msg
+                  ),
+                  updated_at: new Date(),
+                }
+              : session
+          ),
+          currentSession: state.currentSession?.id === sessionId
+            ? {
+                ...state.currentSession,
+                messages: state.currentSession.messages.map((msg) =>
+                  msg.id === messageId ? { ...msg, ...update } : msg
+                ),
+                updated_at: new Date(),
+              }
+            : state.currentSession,
+        }));
+      },
+
+      appendMessageChunk: (sessionId: string, messageId: string, chunk: string) => {
+        set((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === sessionId
+              ? {
+                  ...session,
+                  messages: session.messages.map((msg) =>
+                    msg.id === messageId 
+                      ? { ...msg, content: (msg.content || '') + chunk }
+                      : msg
+                  ),
+                }
+              : session
+          ),
+          currentSession: state.currentSession?.id === sessionId
+            ? {
+                ...state.currentSession,
+                messages: state.currentSession.messages.map((msg) =>
+                  msg.id === messageId 
+                    ? { ...msg, content: (msg.content || '') + chunk }
+                    : msg
+                ),
+              }
+            : state.currentSession,
+        }));
       },
 
       sendMessage: async (courseId: string, question: string, sessionFilter?: string, responseMode: 'strict' | 'enhanced' = 'enhanced') => {
@@ -111,7 +172,6 @@ export const useChatStore = create<ChatState>()(
         
         if (!session) {
           const sessionId = get().createSession(courseId);
-          // Need to get fresh state after createSession updates the store
           session = get().sessions.find((s) => s.id === sessionId);
         }
 
@@ -124,12 +184,11 @@ export const useChatStore = create<ChatState>()(
         });
 
         // Get context messages for follow-up support (short-term memory)
-        // Use fresh state to ensure we have the latest messages
         const contextMessages = get().getContextMessages(courseId);
         const sessionToken = get().getSessionToken(courseId);
 
-        // Add loading message
-        const loadingId = generateId();
+        // Add assistant message placeholder (for streaming)
+        const assistantId = generateId();
         set((s) => ({
           sessions: s.sessions.map((sess) =>
             sess.id === session!.id
@@ -138,7 +197,7 @@ export const useChatStore = create<ChatState>()(
                   messages: [
                     ...sess.messages,
                     {
-                      id: loadingId,
+                      id: assistantId,
                       type: 'assistant',
                       content: '',
                       timestamp: new Date(),
@@ -148,88 +207,78 @@ export const useChatStore = create<ChatState>()(
                 }
               : sess
           ),
+          currentSession: s.currentSession?.id === session!.id
+            ? {
+                ...s.currentSession,
+                messages: [
+                  ...s.currentSession.messages,
+                  {
+                    id: assistantId,
+                    type: 'assistant',
+                    content: '',
+                    timestamp: new Date(),
+                    isLoading: true,
+                  },
+                ],
+              }
+            : s.currentSession,
         }));
 
         set({ isLoading: true, error: null });
 
         try {
-          const response = await api.askTutor({
-            course_id: courseId,
-            question,
-            session_filter: sessionFilter,
-            top_k: 5,
-            enable_validation: true,
-            // Pass short-term context for follow-ups
-            context_messages: contextMessages.length > 0 ? contextMessages : undefined,
-            // Pass session token for analytics grouping
-            session_token: sessionToken,
-            // Pass response mode (strict = context-only, enhanced = AI elaborates)
-            response_mode: responseMode,
-          });
-
-          // Replace loading message with actual response
-          set((s) => ({
-            sessions: s.sessions.map((sess) =>
-              sess.id === session!.id
-                ? {
-                    ...sess,
-                    messages: sess.messages.map((msg) =>
-                      msg.id === loadingId
-                        ? {
-                            ...msg,
-                            content: response.answer,
-                            isLoading: false,
-                            sources: response.sources,
-                            confidence: response.confidence,
-                            confidenceScore: response.confidence_score,
-                            responseTimeMs: response.response_time_ms,
-                          }
-                        : msg
-                    ),
-                  }
-                : sess
-            ),
-            currentSession: s.currentSession?.id === session!.id
-              ? {
-                  ...s.currentSession,
-                  messages: s.currentSession.messages.map((msg) =>
-                    msg.id === loadingId
-                      ? {
-                          ...msg,
-                          content: response.answer,
-                          isLoading: false,
-                          sources: response.sources,
-                          confidence: response.confidence,
-                          confidenceScore: response.confidence_score,
-                          responseTimeMs: response.response_time_ms,
-                        }
-                      : msg
-                  ),
-                }
-              : s.currentSession,
-            isLoading: false,
-          }));
+          // Use streaming API
+          await api.askTutorStream(
+            {
+              course_id: courseId,
+              question,
+              session_filter: sessionFilter,
+              top_k: 5,
+              enable_validation: true,
+              context_messages: contextMessages.length > 0 ? contextMessages : undefined,
+              session_token: sessionToken,
+              response_mode: responseMode,
+            },
+            {
+              onMetadata: (metadata) => {
+                // Update message with metadata (sources, confidence)
+                // Keep isLoading true to show typing cursor while streaming
+                get().updateMessageContent(session!.id, assistantId, {
+                  sources: metadata.sources,
+                  confidence: metadata.confidence,
+                  confidenceScore: metadata.confidence_score,
+                  isLoading: true, // Keep true - cursor shows while streaming
+                });
+              },
+              onChunk: (chunk) => {
+                // Append text chunk to message
+                get().appendMessageChunk(session!.id, assistantId, chunk);
+              },
+              onDone: (done) => {
+                // Update final metrics and hide cursor
+                get().updateMessageContent(session!.id, assistantId, {
+                  responseTimeMs: done.response_time_ms,
+                  isLoading: false, // Now hide the cursor
+                });
+                set({ isLoading: false });
+              },
+              onError: (error) => {
+                // Update message with error
+                get().updateMessageContent(session!.id, assistantId, {
+                  content: 'Sorry, I encountered an error while processing your question. Please try again.',
+                  isLoading: false,
+                });
+                set({ error, isLoading: false });
+              },
+            }
+          );
         } catch (err: any) {
-          // Remove loading message and add error
-          set((s) => ({
-            sessions: s.sessions.map((sess) =>
-              sess.id === session!.id
-                ? {
-                    ...sess,
-                    messages: sess.messages
-                      .filter((msg) => msg.id !== loadingId)
-                      .concat({
-                        id: generateId(),
-                        type: 'assistant',
-                        content: 'Sorry, I encountered an error while processing your question. Please try again.',
-                        timestamp: new Date(),
-                      }),
-                  }
-                : sess
-            ),
-            error: err.message,
+          // Handle connection errors
+          get().updateMessageContent(session!.id, assistantId, {
+            content: 'Sorry, I encountered an error while processing your question. Please try again.',
             isLoading: false,
-          }));
+          });
+          set({ error: err.message, isLoading: false });
         }
       },
 

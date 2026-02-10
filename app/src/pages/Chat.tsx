@@ -47,12 +47,14 @@ function SourceBadge({ confidence }: { confidence?: string }) {
     validated: 'bg-green-500/20 text-green-400 border-green-500/30',
     no_context: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
     generated: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    general_knowledge: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
   };
 
   const labels = {
     validated: 'Source Verified',
     no_context: 'No Context Found',
     generated: 'AI Generated',
+    general_knowledge: 'General Knowledge',
   };
 
   return (
@@ -98,7 +100,7 @@ function SourceCard({ source, index }: { source: { chunk_id: string; relevance_s
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const [copied, setCopied] = useState(false);
-  const [showSources, setShowSources] = useState(true);
+  const [showSources, setShowSources] = useState(false); // Collapsed by default
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
@@ -158,6 +160,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               >
                 {message.content}
               </ReactMarkdown>
+              {/* Typing cursor for streaming effect */}
+              {message.isLoading && message.content && (
+                <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse" />
+              )}
             </div>
           ) : (
             <p className="text-sm">{message.content}</p>
