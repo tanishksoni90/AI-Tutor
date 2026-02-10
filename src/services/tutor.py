@@ -12,6 +12,10 @@ SELF-REFLECTIVE RAG (SelfReflectiveTutorService):
 6. Reduces hallucinations by ~40%
 7. Honest about knowledge gaps
 
+STREAMING SUPPORT:
+8. Supports streaming responses for real-time output
+9. Uses Server-Sent Events (SSE) for frontend integration
+
 Design:
 - Prompt construction is explicit and auditable
 - LLM invocation is isolated
@@ -21,7 +25,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from uuid import UUID
 
 import google.generativeai as genai
@@ -64,37 +68,59 @@ TUTOR_SYSTEM_PROMPT_STRICT = """You are an AI Teaching Assistant for an educatio
 STRICT RULES:
 1. Answer using ONLY the information in the provided course material
 2. Do NOT add information beyond what's in the material
-3. Reference specific slides/sections when answering
-4. If information is not in the material, say "This is not covered in the provided materials"
-5. NEVER provide direct answers to assignment questions
-6. NEVER write code solutions
+3. If information is not in the material, say "This is not covered in the provided materials"
+4. NEVER provide direct answers to assignment questions
+5. NEVER write code solutions
+
+IMPORTANT - NO SLIDE REFERENCES IN YOUR ANSWER:
+- Do NOT mention "Slide X", "According to slide", "From the slides", or any slide/section references
+- Just provide the answer naturally without citing where it came from
+- The source references are shown separately in the UI, so you don't need to mention them
 
 RESPONSE STYLE:
 - Be concise and factual
-- Quote or paraphrase from the course material directly
-- Always cite which slide/session the information comes from
-- Do not elaborate beyond the source content"""
+- Present information naturally without slide citations
+- Match the length/format the student requests (brief = brief, detailed = detailed)"""
 
 
-# System prompt enforcing tutor behavior - ENHANCED MODE (AI elaborates)
-TUTOR_SYSTEM_PROMPT_ENHANCED = """You are an AI Teaching Assistant for an educational course. Your role is to help students UNDERSTAND concepts deeply.
+# System prompt enforcing tutor behavior - ENHANCED MODE (ChatGPT-like explanations)
+TUTOR_SYSTEM_PROMPT_ENHANCED = """You are an expert AI Teaching Assistant - knowledgeable, helpful, and excellent at explaining complex topics clearly.
 
-RULES:
-1. Use the provided course material as your primary source
-2. You MAY elaborate, add examples, and explain in more detail to help understanding
-3. You MAY use your knowledge to provide better explanations and analogies
-4. Reference specific slides when information comes directly from course material
-5. NEVER provide direct answers to assignment questions
-6. NEVER write code solutions or step-by-step problem solutions
-7. If asked for a direct answer, politely redirect to understanding the concept
+YOUR ROLE:
+- Help students truly UNDERSTAND concepts through clear, complete explanations
+- Be like the best teacher they've ever had - thorough, insightful, and engaging
 
-RESPONSE STYLE:
-- Be encouraging and supportive
-- Provide rich, detailed explanations
-- Use analogies and real-world examples
-- Break down complex topics into simpler parts
-- Ask follow-up questions to deepen understanding
-- Reference slides when using course content directly"""
+DEFAULT BEHAVIOR (when no specific length is requested):
+- Provide COMPLETE, HELPFUL explanations - not just brief answers
+- For "what is X" questions → Explain the concept fully with context
+- For "what are the types of X" → List AND explain each type briefly
+- For "how does X work" → Explain the mechanism step by step
+- For "why is X important" → Give reasons with examples
+- Use bullet points, examples, and structure to make it clear
+- Aim for educational depth - help them truly understand
+
+WHEN TO BE BRIEF (only if user explicitly asks):
+- "in one line" / "one sentence" → 1 sentence only
+- "briefly" / "quick" / "short" / "summarize" → 1-3 sentences max
+- "just list" / "list only" → Bullet points without explanations
+
+HOW TO RESPOND:
+1. **Be Direct**: Start with the answer, no filler phrases like "Great question!"
+2. **Be Complete**: Default to helpful, thorough explanations
+3. **Be Structured**: Use headers, bullets, and formatting for clarity
+4. **Use Course Material**: Reference course material when relevant
+5. **Add Value**: Include examples, analogies, and real-world connections
+
+IMPORTANT - NO SLIDE REFERENCES:
+- Do NOT mention "Slide X", "According to slide", etc. in your answer
+- Just present the information naturally - sources are shown separately
+
+ACADEMIC INTEGRITY:
+- NEVER provide complete solutions to homework/assignments
+- NEVER write full code solutions - explain concepts instead
+- Guide students to understand, don't just give answers
+
+Remember: Your default is to be HELPFUL and THOROUGH. Only be brief when explicitly asked."""
 
 
 @dataclass
@@ -271,15 +297,24 @@ class TutorService:
         return "\n\n".join(context_parts)
     
     def _build_prompt(self, question: str, context: str) -> str:
-        """Build the full prompt for the LLM."""
+        """Build the full prompt for the LLM when course material is available."""
         return f"""COURSE MATERIAL:
 {context}
 
 STUDENT QUESTION:
 {question}
 
-Please help the student understand this topic based on the course material above. Remember: explain concepts, don't provide direct answers."""
-    
+Answer the student's question. Use the course material as reference when relevant. 
+IMPORTANT: Match the length/format the student requests. If they ask for "one line", give one line only. If they ask for detail, elaborate."""
+
+    def _build_general_knowledge_prompt(self, question: str, context: str) -> str:
+        """Build the prompt for when no relevant course material is found."""
+        return f"""STUDENT QUESTION:
+{question}
+
+The student's course materials don't directly cover this topic. Answer using your knowledge.
+IMPORTANT: Match the length/format the student requests. If they ask for "one line", give one line only. If they want detail, elaborate."""
+
     def _detect_assignment_question(self, question: str) -> bool:
         """
         Detect if question is likely asking for assignment answers.
@@ -317,6 +352,34 @@ Please help the student understand this topic based on the course material above
             response = model.generate_content(prompt)
         
         return response.text
+    
+    async def _invoke_llm_stream(
+        self, 
+        prompt: str, 
+        conversation_history: Optional[List[dict]],
+        response_mode: str = "enhanced"
+    ) -> AsyncGenerator[str, None]:
+        """
+        Invoke Gemini with streaming support.
+        
+        Yields text chunks as they are generated for real-time output.
+        """
+        model = self._get_model(response_mode)
+        
+        # Build chat history if provided
+        if conversation_history:
+            chat = model.start_chat(history=[
+                {"role": msg["role"], "parts": [msg["content"]]}
+                for msg in conversation_history
+            ])
+            response = chat.send_message(prompt, stream=True)
+        else:
+            response = model.generate_content(prompt, stream=True)
+        
+        # Yield chunks as they arrive
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
     
     def _build_sources(self, chunks: List[RetrievedChunk]) -> List[dict]:
         """Build source references for attribution."""
@@ -394,25 +457,33 @@ class SelfReflectiveTutorService(TutorService):
             # On validation error, fall back to attempting answer
             can_answer = True
         
-        # 4. If validation says NO, return early with honest response
-        if not can_answer:
-            is_assignment_question = self._detect_assignment_question(request.question)
-            response_time_ms = int((time.time() - start_time) * 1000)
-            no_context_response = TutorResponse(
-                answer="I don't have enough information in the course materials to answer this question confidently. Could you rephrase your question or ask about a topic covered in the lectures?",
-                sources=[],
-                was_redirected=is_assignment_question,
-                model_used=self.model_name,
-                confidence="no_context",
-                confidence_score=0,
-                response_time_ms=response_time_ms
-            )
-            # Log analytics even for no_context responses (was_hallucination=True since no valid answer)
-            await self._log_analytics(request, no_context_response, was_hallucination=True)
-            return no_context_response
+        # 4. If validation says NO, still answer but note it's from general knowledge
+        # COMMENTED OUT: Old behavior that rejected questions without course content
+        # if not can_answer:
+        #     is_assignment_question = self._detect_assignment_question(request.question)
+        #     response_time_ms = int((time.time() - start_time) * 1000)
+        #     no_context_response = TutorResponse(
+        #         answer="I don't have enough information in the course materials to answer this question confidently. Could you rephrase your question or ask about a topic covered in the lectures?",
+        #         sources=[],
+        #         was_redirected=is_assignment_question,
+        #         model_used=self.model_name,
+        #         confidence="no_context",
+        #         confidence_score=0,
+        #         response_time_ms=response_time_ms
+        #     )
+        #     # Log analytics even for no_context responses (was_hallucination=True since no valid answer)
+        #     await self._log_analytics(request, no_context_response, was_hallucination=True)
+        #     return no_context_response
         
-        # 5. Validation passed - generate the answer using requested response mode
-        prompt = self._build_prompt(request.question, context)
+        # NEW BEHAVIOR: Always answer helpfully, but track if it's from course content or general knowledge
+        has_course_context = can_answer and len(request.retrieval_result.chunks) > 0
+        
+        # 5. Generate the answer - use different prompt based on context availability
+        if has_course_context:
+            prompt = self._build_prompt(request.question, context)
+        else:
+            prompt = self._build_general_knowledge_prompt(request.question, context)
+        
         is_assignment_question = self._detect_assignment_question(request.question)
         
         # Merge context_messages into conversation_history
@@ -437,15 +508,22 @@ class SelfReflectiveTutorService(TutorService):
         # Calculate response time
         response_time_ms = int((time.time() - start_time) * 1000)
         
-        # Calculate confidence score based on number of sources and relevance
-        confidence_score = min(100, len(sources) * 20) if sources else 50
+        # Calculate confidence score and type based on whether course content was used
+        if has_course_context:
+            # Answer is backed by course materials
+            confidence = "validated"
+            confidence_score = min(100, len(sources) * 20 + 40)  # Higher base score
+        else:
+            # Answer is from general knowledge (still helpful, just not from course)
+            confidence = "general_knowledge"
+            confidence_score = 60  # Moderate confidence for general knowledge answers
         
         tutor_response = TutorResponse(
             answer=response,
             sources=sources,
             was_redirected=is_assignment_question,
             model_used=self.model_name,
-            confidence="validated",
+            confidence=confidence,
             confidence_score=confidence_score,
             response_time_ms=response_time_ms
         )
@@ -501,6 +579,141 @@ class SelfReflectiveTutorService(TutorService):
             logger.error(f"Failed to log analytics: {str(e)}")
             # Don't fail the request if analytics logging fails
             await self.db.rollback()
+
+    async def respond_stream(
+        self, 
+        request: TutorRequest
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Generate a streaming tutor response with self-reflection validation.
+        
+        Yields SSE-compatible events:
+        - {"type": "metadata", "data": {...}} - Initial metadata (sources, confidence)
+        - {"type": "chunk", "data": "text"} - Text chunk
+        - {"type": "done", "data": {...}} - Final metrics
+        - {"type": "error", "data": "message"} - Error occurred
+        
+        Flow:
+        1. Fetch chunks and validate context
+        2. Yield metadata (sources, confidence level)
+        3. Stream answer chunks
+        4. Yield final metrics and log analytics
+        """
+        start_time = time.time()
+        
+        try:
+            # 1. Fetch full text for retrieved chunks
+            chunk_ids = [
+                UUID(chunk.chunk_id) 
+                for chunk in request.retrieval_result.chunks
+            ]
+            full_texts = await self.chunk_repo.get_full_text_by_ids(chunk_ids)
+            
+            # 2. Build the context from chunks
+            context = self._build_context(request.retrieval_result.chunks, full_texts)
+            
+            # 3. VALIDATION STEP: Check if we can answer with this context
+            validation_prompt = VALIDATION_PROMPT.format(
+                context=context,
+                question=request.question
+            )
+            
+            try:
+                validation_response = await self._invoke_llm(
+                    validation_prompt, 
+                    None,
+                    "strict"
+                )
+                normalized_response = validation_response.strip().upper()
+                can_answer = normalized_response.startswith("YES")
+                logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
+            except Exception as e:
+                logger.error(f"Validation failed: {str(e)}")
+                can_answer = True
+            
+            # 4. Determine context availability
+            has_course_context = can_answer and len(request.retrieval_result.chunks) > 0
+            
+            # 5. Build sources
+            sources = self._build_sources(request.retrieval_result.chunks)
+            
+            # Calculate confidence
+            if has_course_context:
+                confidence = "validated"
+                confidence_score = min(100, len(sources) * 20 + 40)
+            else:
+                confidence = "general_knowledge"
+                confidence_score = 60
+            
+            is_assignment_question = self._detect_assignment_question(request.question)
+            
+            # 6. YIELD METADATA FIRST
+            yield {
+                "type": "metadata",
+                "data": {
+                    "sources": sources,
+                    "confidence": confidence,
+                    "confidence_score": confidence_score,
+                    "chunks_used": len(sources),
+                    "model_used": self.model_name,
+                    "was_redirected": is_assignment_question
+                }
+            }
+            
+            # 7. Build prompt and merge history
+            if has_course_context:
+                prompt = self._build_prompt(request.question, context)
+            else:
+                prompt = self._build_general_knowledge_prompt(request.question, context)
+            
+            merged_history = self._merge_context_messages(
+                request.conversation_history,
+                request.context_messages
+            )
+            
+            # 8. STREAM THE RESPONSE
+            full_response = ""
+            async for chunk in self._invoke_llm_stream(
+                prompt, 
+                merged_history,
+                request.response_mode
+            ):
+                full_response += chunk
+                yield {
+                    "type": "chunk",
+                    "data": chunk
+                }
+            
+            # 9. Calculate final metrics
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            # 10. YIELD DONE EVENT
+            yield {
+                "type": "done",
+                "data": {
+                    "response_time_ms": response_time_ms,
+                    "response_length": len(full_response)
+                }
+            }
+            
+            # 11. Log analytics
+            tutor_response = TutorResponse(
+                answer=full_response,
+                sources=sources,
+                was_redirected=is_assignment_question,
+                model_used=self.model_name,
+                confidence=confidence,
+                confidence_score=confidence_score,
+                response_time_ms=response_time_ms
+            )
+            await self._log_analytics(request, tutor_response, was_hallucination=False)
+            
+        except Exception as e:
+            logger.error(f"Streaming response failed: {str(e)}")
+            yield {
+                "type": "error",
+                "data": str(e)
+            }
 
 
 async def get_tutor_response(

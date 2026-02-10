@@ -7,15 +7,22 @@ Main endpoint: POST /api/v1/tutor/ask
 - Generates tutor response
 - Returns with source attribution
 
+Streaming endpoint: POST /api/v1/tutor/ask/stream
+- Same as /ask but streams response using Server-Sent Events (SSE)
+- Returns chunks in real-time for better UX
+
 HYBRID MEMORY APPROACH:
 - Short-term: Context messages passed from frontend (last 3-5 messages)
 - Long-term: Query analytics stored for insights (no conversation text)
 """
+import json
+import logging
 from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
@@ -28,6 +35,7 @@ from src.services.retrieval import (
 from src.services.tutor import SelfReflectiveTutorService, TutorRequest, ContextMessage
 
 router = APIRouter(prefix="/tutor", tags=["tutor"])
+logger = logging.getLogger(__name__)
 
 
 # Request/Response Models
@@ -213,3 +221,109 @@ async def ask_tutor(
 async def tutor_health():
     """Health check for tutor service."""
     return {"status": "ok", "service": "tutor"}
+
+
+@router.post(
+    "/ask/stream",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"model": ErrorResponse, "description": "Access denied - not enrolled"},
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        500: {"model": ErrorResponse, "description": "Internal error"}
+    }
+)
+async def ask_tutor_stream(
+    request: AskRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Ask the AI tutor a question with streaming response.
+    
+    Returns a Server-Sent Events (SSE) stream with the following event types:
+    
+    - **metadata**: Initial metadata including sources, confidence, model_used
+    - **chunk**: Text chunk of the response (stream these to build the answer)
+    - **done**: Final metrics (response_time_ms, response_length)
+    - **error**: Error message if something went wrong
+    
+    ## Example SSE Stream:
+    ```
+    data: {"type": "metadata", "data": {"sources": [...], "confidence": "validated"}}
+    
+    data: {"type": "chunk", "data": "Machine learning is"}
+    
+    data: {"type": "chunk", "data": " a subset of artificial"}
+    
+    data: {"type": "chunk", "data": " intelligence..."}
+    
+    data: {"type": "done", "data": {"response_time_ms": 1234}}
+    ```
+    
+    Same authentication and enrollment validation as /ask.
+    """
+    
+    async def generate_stream():
+        """Generator for SSE stream."""
+        try:
+            # 1. Retrieve relevant chunks (includes enrollment validation)
+            retrieval_service = RetrievalService(db)
+            retrieval_request = RetrievalRequest(
+                student_id=current_user.id,
+                course_id=request.course_id,
+                query=request.question,
+                top_k=request.top_k,
+                exclude_assignments=True,
+                session_filter=request.session_filter
+            )
+            
+            retrieval_result = await retrieval_service.retrieve(retrieval_request)
+            
+            # 2. Convert context messages
+            context_messages = None
+            if request.context_messages:
+                context_messages = [
+                    ContextMessage(role=msg.role, content=msg.content)
+                    for msg in request.context_messages
+                ]
+            
+            # 3. Create tutor service and request
+            tutor_service = SelfReflectiveTutorService(
+                db, 
+                enable_analytics=True
+            )
+            tutor_request = TutorRequest(
+                student_id=current_user.id,
+                course_id=request.course_id,
+                question=request.question,
+                retrieval_result=retrieval_result,
+                session_token=request.session_token,
+                context_messages=context_messages,
+                response_mode=request.response_mode
+            )
+            
+            # 4. Stream the response
+            async for event in tutor_service.respond_stream(tutor_request):
+                # Format as SSE
+                yield f"data: {json.dumps(event)}\n\n"
+                
+        except AccessDeniedError as e:
+            error_event = {"type": "error", "data": str(e)}
+            yield f"data: {json.dumps(error_event)}\n\n"
+        except ValueError as e:
+            error_event = {"type": "error", "data": str(e)}
+            yield f"data: {json.dumps(error_event)}\n\n"
+        except Exception as e:
+            logger.error(f"Streaming tutor error: {str(e)}", exc_info=True)
+            error_event = {"type": "error", "data": "An error occurred processing your request"}
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )

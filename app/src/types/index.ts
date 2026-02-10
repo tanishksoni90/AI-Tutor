@@ -82,9 +82,30 @@ export interface TutorResponse {
   sources: SourceReference[];
   chunks_used: number;
   model_used: string;
-  confidence: 'validated' | 'no_context' | 'generated';
+  confidence: 'validated' | 'no_context' | 'generated' | 'general_knowledge';
   confidence_score?: number;  // 0-100 numeric score
   response_time_ms?: number;  // Response latency
+}
+
+// ==================== Streaming Response Types ====================
+
+export interface StreamMetadata {
+  sources: SourceReference[];
+  confidence: 'validated' | 'no_context' | 'generated' | 'general_knowledge';
+  confidence_score: number;
+  chunks_used: number;
+  model_used: string;
+  was_redirected: boolean;
+}
+
+export interface StreamDone {
+  response_time_ms: number;
+  response_length: number;
+}
+
+export interface StreamEvent {
+  type: 'metadata' | 'chunk' | 'done' | 'error';
+  data: StreamMetadata | string | StreamDone;
 }
 
 // ==================== Chat History (Frontend State) ====================
