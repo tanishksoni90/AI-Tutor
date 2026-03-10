@@ -94,7 +94,7 @@ class Student(Base):
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     org_id = Column(UUID(), ForeignKey("orgs.id"), nullable=False)
-    email = Column(String, unique=True, nullable=False)
+    email = Column(String, nullable=True)
     full_name = Column(String, nullable=True)
     hashed_password = Column(String, nullable=True)  # Nullable for pending invitations
     role = Column(String, default=StudentRole.STUDENT.value, nullable=False)
