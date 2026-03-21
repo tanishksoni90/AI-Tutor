@@ -123,6 +123,20 @@ ACADEMIC INTEGRITY:
 Remember: Your default is to be HELPFUL and THOROUGH. Only be brief when explicitly asked."""
 
 
+# Voice-optimized system prompt for concise spoken responses
+TUTOR_SYSTEM_PROMPT_VOICE = """You are an AI Teaching Assistant answering a student's spoken question.
+
+RULES:
+1. Answer in 2-3 SHORT sentences only — this will be spoken aloud
+2. Use the provided course material as your source
+3. Be conversational and natural — avoid bullet points, headers, or formatting
+4. Do NOT mention slides, sections, or any references
+5. If the material doesn't cover the question, say so briefly
+6. NEVER provide assignment solutions
+
+Speak naturally as if you're a helpful tutor talking to a student."""
+
+
 @dataclass
 class TutorRequest:
     """Request for tutor assistance."""
@@ -134,6 +148,7 @@ class TutorRequest:
     session_token: Optional[str] = None  # For analytics grouping
     context_messages: Optional[List[ContextMessage]] = None  # Short-term memory
     response_mode: str = "enhanced"  # "strict" or "enhanced"
+    voice_mode: bool = False  # If True, generate concise voice-friendly response
 
 
 @dataclass
@@ -174,12 +189,14 @@ class TutorService:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         logger.info(f"Initialized TutorService with model: {self.model_name}")
     
-    def _get_model(self, response_mode: str = "enhanced"):
+    def _get_model(self, response_mode: str = "enhanced", voice_mode: bool = False):
         """Get model configured with appropriate system prompt based on response_mode."""
-        system_prompt = (
-            TUTOR_SYSTEM_PROMPT_STRICT if response_mode == "strict" 
-            else TUTOR_SYSTEM_PROMPT_ENHANCED
-        )
+        if voice_mode:
+            system_prompt = TUTOR_SYSTEM_PROMPT_VOICE
+        elif response_mode == "strict":
+            system_prompt = TUTOR_SYSTEM_PROMPT_STRICT
+        else:
+            system_prompt = TUTOR_SYSTEM_PROMPT_ENHANCED
         return genai.GenerativeModel(
             model_name=self.model_name,
             system_instruction=system_prompt
@@ -336,10 +353,11 @@ IMPORTANT: Match the length/format the student requests. If they ask for "one li
         self, 
         prompt: str, 
         conversation_history: Optional[List[dict]],
-        response_mode: str = "enhanced"
+        response_mode: str = "enhanced",
+        voice_mode: bool = False
     ) -> str:
         """Invoke Gemini with the prompt."""
-        model = self._get_model(response_mode)
+        model = self._get_model(response_mode, voice_mode)
         
         # Build chat history if provided
         if conversation_history:
@@ -357,14 +375,15 @@ IMPORTANT: Match the length/format the student requests. If they ask for "one li
         self, 
         prompt: str, 
         conversation_history: Optional[List[dict]],
-        response_mode: str = "enhanced"
+        response_mode: str = "enhanced",
+        voice_mode: bool = False
     ) -> AsyncGenerator[str, None]:
         """
         Invoke Gemini with streaming support.
         
         Yields text chunks as they are generated for real-time output.
         """
-        model = self._get_model(response_mode)
+        model = self._get_model(response_mode, voice_mode)
         
         # Build chat history if provided
         if conversation_history:
@@ -432,30 +451,31 @@ class SelfReflectiveTutorService(TutorService):
         context = self._build_context(request.retrieval_result.chunks, full_texts)
         
         # 3. VALIDATION STEP: Check if we can answer with this context
-        validation_prompt = VALIDATION_PROMPT.format(
-            context=context,
-            question=request.question
-        )
-        
-        try:
-            # Validation should be stateless - don't pass conversation history
-            # Use strict mode for validation to get concise YES/NO responses
-            validation_response = await self._invoke_llm(
-                validation_prompt, 
-                None,  # No conversation history for validation
-                "strict"  # Validation uses strict mode for concise responses
+        # Skip validation for voice mode (saves ~1-1.5s of latency)
+        if request.voice_mode:
+            can_answer = len(request.retrieval_result.chunks) > 0
+            logger.info(f"Voice mode: skipping validation, chunks={len(request.retrieval_result.chunks)}")
+        else:
+            validation_prompt = VALIDATION_PROMPT.format(
+                context=context,
+                question=request.question
             )
             
-            # Use prefix match to handle verbose responses (e.g., "YES, because...")
-            normalized_response = validation_response.strip().upper()
-            can_answer = normalized_response.startswith("YES")
-            
-            logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
-            
-        except Exception as e:
-            logger.error(f"Validation failed: {str(e)}")
-            # On validation error, fall back to attempting answer
-            can_answer = True
+            try:
+                validation_response = await self._invoke_llm(
+                    validation_prompt, 
+                    None,
+                    "strict"
+                )
+                
+                normalized_response = validation_response.strip().upper()
+                can_answer = normalized_response.startswith("YES")
+                
+                logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
+                
+            except Exception as e:
+                logger.error(f"Validation failed: {str(e)}")
+                can_answer = True
         
         # 4. If validation says NO, still answer but note it's from general knowledge
         # COMMENTED OUT: Old behavior that rejected questions without course content
@@ -496,7 +516,8 @@ class SelfReflectiveTutorService(TutorService):
             response = await self._invoke_llm(
                 prompt, 
                 merged_history,
-                request.response_mode
+                request.response_mode,
+                voice_mode=request.voice_mode
             )
         except Exception as e:
             logger.error(f"LLM invocation failed: {str(e)}")
@@ -613,23 +634,28 @@ class SelfReflectiveTutorService(TutorService):
             context = self._build_context(request.retrieval_result.chunks, full_texts)
             
             # 3. VALIDATION STEP: Check if we can answer with this context
-            validation_prompt = VALIDATION_PROMPT.format(
-                context=context,
-                question=request.question
-            )
-            
-            try:
-                validation_response = await self._invoke_llm(
-                    validation_prompt, 
-                    None,
-                    "strict"
+            # Skip validation for voice mode (saves ~1-1.5s of latency)
+            if request.voice_mode:
+                can_answer = len(request.retrieval_result.chunks) > 0
+                logger.info(f"Voice mode: skipping validation, chunks={len(request.retrieval_result.chunks)}")
+            else:
+                validation_prompt = VALIDATION_PROMPT.format(
+                    context=context,
+                    question=request.question
                 )
-                normalized_response = validation_response.strip().upper()
-                can_answer = normalized_response.startswith("YES")
-                logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
-            except Exception as e:
-                logger.error(f"Validation failed: {str(e)}")
-                can_answer = True
+                
+                try:
+                    validation_response = await self._invoke_llm(
+                        validation_prompt, 
+                        None,
+                        "strict"
+                    )
+                    normalized_response = validation_response.strip().upper()
+                    can_answer = normalized_response.startswith("YES")
+                    logger.info(f"Validation result: {validation_response.strip()} -> can_answer={can_answer}")
+                except Exception as e:
+                    logger.error(f"Validation failed: {str(e)}")
+                    can_answer = True
             
             # 4. Determine context availability
             has_course_context = can_answer and len(request.retrieval_result.chunks) > 0
@@ -676,7 +702,8 @@ class SelfReflectiveTutorService(TutorService):
             async for chunk in self._invoke_llm_stream(
                 prompt, 
                 merged_history,
-                request.response_mode
+                request.response_mode,
+                voice_mode=request.voice_mode
             ):
                 full_response += chunk
                 yield {
@@ -710,6 +737,145 @@ class SelfReflectiveTutorService(TutorService):
             
         except Exception as e:
             logger.error(f"Streaming response failed: {str(e)}")
+            yield {
+                "type": "error",
+                "data": str(e)
+            }
+
+
+class GeneralChatService:
+    """
+    General chat service for the Learning/AI Tutor mode.
+    
+    Provides direct LLM responses WITHOUT RAG retrieval.
+    Used for general learning conversations, explanations,
+    and educational discussions not tied to specific course material.
+    
+    Much faster than RAG mode since no embedding/retrieval step.
+    """
+    
+    # System prompt for general learning mode
+    GENERAL_SYSTEM_PROMPT = """You are an expert AI Tutor — warm, knowledgeable, and excellent at explaining any topic clearly.
+
+YOUR ROLE:
+- Help students learn and understand ANY topic through clear, engaging explanations
+- Be like the best teacher they've ever had — patient, insightful, and encouraging
+- You are NOT limited to any specific course material — use your full knowledge
+
+HOW TO RESPOND:
+1. **Be Direct**: Start with the answer, no filler phrases
+2. **Be Clear**: Use simple language, analogies, and examples
+3. **Be Structured**: Use headers, bullets, and formatting when helpful
+4. **Be Adaptive**: Match the student's level — simple for basics, detailed for advanced
+5. **Be Encouraging**: Praise curiosity, guide thinking
+
+RESPONSE LENGTH:
+- Default to helpful, complete explanations
+- If the student asks for "brief" / "short" → Keep it concise (2-3 sentences)
+- For complex topics → Break down step by step
+- For definitions → Give a clear definition with an example
+
+ACADEMIC INTEGRITY:
+- NEVER write complete homework solutions
+- Guide students to understand concepts, don't just give answers
+- Encourage independent thinking
+
+Remember: You are a supportive learning companion. Be helpful, accurate, and engaging."""
+
+    GENERAL_VOICE_PROMPT = """You are a friendly AI Tutor answering a student's spoken question.
+
+RULES:
+1. Answer in 2-3 SHORT sentences — this will be spoken aloud
+2. Be conversational and natural — no bullet points or formatting
+3. Use your full knowledge to answer any topic
+4. Be encouraging and warm
+5. NEVER provide assignment solutions
+
+Speak naturally as if you're a helpful tutor talking to a student."""
+
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or settings.LLM_MODEL
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        logger.info(f"Initialized GeneralChatService with model: {self.model_name}")
+    
+    def _get_model(self, voice_mode: bool = False):
+        """Get model with appropriate system prompt."""
+        system_prompt = self.GENERAL_VOICE_PROMPT if voice_mode else self.GENERAL_SYSTEM_PROMPT
+        return genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=system_prompt
+        )
+    
+    async def respond_stream(
+        self,
+        question: str,
+        context_messages: Optional[List[ContextMessage]] = None,
+        voice_mode: bool = False,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Generate a streaming general chat response (no RAG).
+        
+        Yields SSE-compatible events:
+        - {"type": "metadata", "data": {...}} — Minimal metadata
+        - {"type": "chunk", "data": "text"} — Text chunk
+        - {"type": "done", "data": {...}} — Final metrics
+        """
+        start_time = time.time()
+        
+        try:
+            model = self._get_model(voice_mode)
+            
+            # Build conversation history from context messages
+            history = None
+            if context_messages:
+                history = [
+                    {"role": msg.role, "parts": [msg.content]}
+                    for msg in context_messages
+                ]
+            
+            # Yield metadata immediately (no sources in general mode)
+            yield {
+                "type": "metadata",
+                "data": {
+                    "sources": [],
+                    "confidence": "general_knowledge",
+                    "confidence_score": 80,
+                    "chunks_used": 0,
+                    "model_used": self.model_name,
+                    "was_redirected": False
+                }
+            }
+            
+            # Stream the response
+            if history:
+                chat = model.start_chat(history=history)
+                response = chat.send_message(question, stream=True)
+            else:
+                response = model.generate_content(question, stream=True)
+            
+            full_response = ""
+            for chunk in response:
+                if chunk.text:
+                    full_response += chunk.text
+                    yield {
+                        "type": "chunk",
+                        "data": chunk.text
+                    }
+            
+            # Yield done event
+            response_time_ms = int((time.time() - start_time) * 1000)
+            yield {
+                "type": "done",
+                "data": {
+                    "response_time_ms": response_time_ms,
+                    "response_length": len(full_response)
+                }
+            }
+            
+            logger.info(f"General chat response: {len(full_response)} chars in {response_time_ms}ms")
+            
+        except Exception as e:
+            logger.error(f"General chat streaming failed: {str(e)}")
             yield {
                 "type": "error",
                 "data": str(e)

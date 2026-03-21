@@ -11,11 +11,11 @@ import { Landing } from '@/pages/Landing';
 import { Login } from '@/pages/Login';
 import { AdminLogin } from '@/pages/AdminLogin';
 import { AcceptInvitation } from '@/pages/AcceptInvitation';
-import { Dashboard } from '@/pages/Dashboard';
-import { Courses } from '@/pages/Courses';
-import { ChatHistory } from '@/pages/ChatHistory';
-import { Chat } from '@/pages/Chat';
-import { Settings } from '@/pages/Settings';
+
+// New ChatGPT-style student pages
+import { DashboardPage } from '@/pages/DashboardPage';
+import { ChatPage } from '@/pages/ChatPage';
+import { SettingsPage } from '@/pages/SettingsPage';
 
 // Admin Pages
 import { 
@@ -65,12 +65,15 @@ function App() {
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="/accept-invitation" element={<AcceptInvitation />} />
             
-            {/* Student Protected Routes */}
-            <Route path="/dashboard" element={<StudentRoute><Dashboard /></StudentRoute>} />
-            <Route path="/courses" element={<StudentRoute><Courses /></StudentRoute>} />
-            <Route path="/history" element={<StudentRoute><ChatHistory /></StudentRoute>} />
-            <Route path="/chat/:courseId" element={<StudentRoute><Chat /></StudentRoute>} />
-            <Route path="/settings" element={<StudentRoute><Settings /></StudentRoute>} />
+            {/* Student Protected Routes — Two Modes */}
+            <Route path="/dashboard" element={<StudentRoute><DashboardPage /></StudentRoute>} />
+            <Route path="/doubt-clearing" element={<StudentRoute><ChatPage mode="doubt-clearing" /></StudentRoute>} />
+            <Route path="/learning" element={<StudentRoute><ChatPage mode="learning" /></StudentRoute>} />
+            {/* Legacy route redirects */}
+            <Route path="/courses" element={<StudentRoute><Navigate to="/dashboard" replace /></StudentRoute>} />
+            <Route path="/history" element={<StudentRoute><Navigate to="/dashboard" replace /></StudentRoute>} />
+            <Route path="/chat/:courseId" element={<StudentRoute><Navigate to="/doubt-clearing" replace /></StudentRoute>} />
+            <Route path="/settings" element={<StudentRoute><SettingsPage /></StudentRoute>} />
             
             {/* Admin Protected Routes */}
             <Route path="/admin" element={<AdminRoute><AdminOverview /></AdminRoute>} />

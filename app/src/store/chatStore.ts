@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ChatMessage, ChatSession, StreamMetadata, StreamDone } from '@/types';
+import type { ChatMessage, ChatSession, StreamMetadata, StreamDone, ChatMode } from '@/types';
 import { api } from '@/lib/api';
 
 /**
@@ -43,7 +43,7 @@ interface ChatState {
   addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   updateMessageContent: (sessionId: string, messageId: string, update: Partial<ChatMessage>) => void;
   appendMessageChunk: (sessionId: string, messageId: string, chunk: string) => void;
-  sendMessage: (courseId: string, question: string, sessionFilter?: string, responseMode?: 'strict' | 'enhanced') => Promise<void>;
+  sendMessage: (courseId: string, question: string, sessionFilter?: string, responseMode?: 'strict' | 'enhanced', voiceMode?: boolean, chatMode?: ChatMode) => Promise<void>;
   setCurrentSession: (session: ChatSession | null) => void;
   clearSessions: () => void;
   clearSessionMessages: (courseId: string) => void;
@@ -167,7 +167,7 @@ export const useChatStore = create<ChatState>()(
         }));
       },
 
-      sendMessage: async (courseId: string, question: string, sessionFilter?: string, responseMode: 'strict' | 'enhanced' = 'enhanced') => {
+      sendMessage: async (courseId: string, question: string, sessionFilter?: string, responseMode: 'strict' | 'enhanced' = 'enhanced', voiceMode: boolean = false, chatMode: ChatMode = 'doubt-clearing') => {
         let session = get().getSessionByCourseId(courseId);
         
         if (!session) {
@@ -226,52 +226,62 @@ export const useChatStore = create<ChatState>()(
 
         set({ isLoading: true, error: null });
 
+        const streamCallbacks = {
+          onMetadata: (metadata: StreamMetadata) => {
+            get().updateMessageContent(session!.id, assistantId, {
+              sources: metadata.sources,
+              confidence: metadata.confidence,
+              confidenceScore: metadata.confidence_score,
+              isLoading: true,
+            });
+          },
+          onChunk: (chunk: string) => {
+            get().appendMessageChunk(session!.id, assistantId, chunk);
+          },
+          onDone: (done: StreamDone) => {
+            get().updateMessageContent(session!.id, assistantId, {
+              responseTimeMs: done.response_time_ms,
+              isLoading: false,
+            });
+            set({ isLoading: false });
+          },
+          onError: (error: string) => {
+            get().updateMessageContent(session!.id, assistantId, {
+              content: 'Sorry, I encountered an error while processing your question. Please try again.',
+              isLoading: false,
+            });
+            set({ error, isLoading: false });
+          },
+        };
+
         try {
-          // Use streaming API
-          await api.askTutorStream(
-            {
-              course_id: courseId,
-              question,
-              session_filter: sessionFilter,
-              top_k: 5,
-              enable_validation: true,
-              context_messages: contextMessages.length > 0 ? contextMessages : undefined,
-              session_token: sessionToken,
-              response_mode: responseMode,
-            },
-            {
-              onMetadata: (metadata) => {
-                // Update message with metadata (sources, confidence)
-                // Keep isLoading true to show typing cursor while streaming
-                get().updateMessageContent(session!.id, assistantId, {
-                  sources: metadata.sources,
-                  confidence: metadata.confidence,
-                  confidenceScore: metadata.confidence_score,
-                  isLoading: true, // Keep true - cursor shows while streaming
-                });
+          if (chatMode === 'learning') {
+            // LEARNING MODE: General LLM, no RAG
+            await api.askGeneralStream(
+              {
+                question,
+                context_messages: contextMessages.length > 0 ? contextMessages : undefined,
+                voice_mode: voiceMode,
               },
-              onChunk: (chunk) => {
-                // Append text chunk to message
-                get().appendMessageChunk(session!.id, assistantId, chunk);
+              streamCallbacks
+            );
+          } else {
+            // DOUBT CLEARING MODE: Full RAG pipeline
+            await api.askTutorStream(
+              {
+                course_id: courseId,
+                question,
+                session_filter: sessionFilter,
+                top_k: 5,
+                enable_validation: true,
+                context_messages: contextMessages.length > 0 ? contextMessages : undefined,
+                session_token: sessionToken,
+                response_mode: responseMode,
+                voice_mode: voiceMode,
               },
-              onDone: (done) => {
-                // Update final metrics and hide cursor
-                get().updateMessageContent(session!.id, assistantId, {
-                  responseTimeMs: done.response_time_ms,
-                  isLoading: false, // Now hide the cursor
-                });
-                set({ isLoading: false });
-              },
-              onError: (error) => {
-                // Update message with error
-                get().updateMessageContent(session!.id, assistantId, {
-                  content: 'Sorry, I encountered an error while processing your question. Please try again.',
-                  isLoading: false,
-                });
-                set({ error, isLoading: false });
-              },
-            }
-          );
+              streamCallbacks
+            );
+          }
         } catch (err: any) {
           // Handle connection errors
           get().updateMessageContent(session!.id, assistantId, {

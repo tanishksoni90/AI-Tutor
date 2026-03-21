@@ -32,7 +32,8 @@ from src.services.retrieval import (
     RetrievalRequest, 
     AccessDeniedError
 )
-from src.services.tutor import SelfReflectiveTutorService, TutorRequest, ContextMessage
+from src.services.tutor import SelfReflectiveTutorService, TutorRequest, ContextMessage, GeneralChatService
+from src.services.learning_tools import LearningToolsService
 
 router = APIRouter(prefix="/tutor", tags=["tutor"])
 logger = logging.getLogger(__name__)
@@ -72,6 +73,12 @@ class AskRequest(BaseModel):
         default=None, 
         max_length=64,
         description="Optional session token for analytics grouping"
+    )
+    
+    # Voice mode: concise responses, skip validation for speed
+    voice_mode: bool = Field(
+        default=False,
+        description="Voice mode: generates concise 2-3 sentence responses and skips validation for faster response"
     )
 
 
@@ -147,12 +154,16 @@ async def ask_tutor(
     try:
         # 1. Retrieve relevant chunks (includes enrollment validation)
         retrieval_service = RetrievalService(db)
+        # When user explicitly selects a session, include ALL content from that session
+        # (Post-Read/Pre-Read materials have assignment_allowed=False but should
+        # be accessible when the student specifically selects that session)
+        exclude_assignments = not bool(request.session_filter)
         retrieval_request = RetrievalRequest(
             student_id=current_user.id,  # From JWT token
             course_id=request.course_id,
             query=request.question,
             top_k=request.top_k,
-            exclude_assignments=True,  # Always safe mode
+            exclude_assignments=exclude_assignments,
             session_filter=request.session_filter
         )
         
@@ -178,7 +189,8 @@ async def ask_tutor(
             retrieval_result=retrieval_result,
             session_token=request.session_token,
             context_messages=context_messages,
-            response_mode=request.response_mode  # Pass response mode to tutor
+            response_mode=request.response_mode,
+            voice_mode=request.voice_mode
         )
         
         tutor_response = await tutor_service.respond(tutor_request)
@@ -268,12 +280,14 @@ async def ask_tutor_stream(
         try:
             # 1. Retrieve relevant chunks (includes enrollment validation)
             retrieval_service = RetrievalService(db)
+            # When user explicitly selects a session, include ALL content
+            exclude_assignments = not bool(request.session_filter)
             retrieval_request = RetrievalRequest(
                 student_id=current_user.id,
                 course_id=request.course_id,
                 query=request.question,
                 top_k=request.top_k,
-                exclude_assignments=True,
+                exclude_assignments=exclude_assignments,
                 session_filter=request.session_filter
             )
             
@@ -299,7 +313,8 @@ async def ask_tutor_stream(
                 retrieval_result=retrieval_result,
                 session_token=request.session_token,
                 context_messages=context_messages,
-                response_mode=request.response_mode
+                response_mode=request.response_mode,
+                voice_mode=request.voice_mode
             )
             
             # 4. Stream the response
@@ -327,3 +342,204 @@ async def ask_tutor_stream(
             "X-Accel-Buffering": "no"  # Disable nginx buffering
         }
     )
+
+
+# ─── General Chat Endpoint (No RAG) ──────────────────────────────
+
+class GeneralAskRequest(BaseModel):
+    """Request for general chat without RAG retrieval."""
+    question: str = Field(..., min_length=1, max_length=2000)
+    
+    # Short-term memory: Last few messages for follow-up context
+    context_messages: Optional[List[ContextMessageInput]] = Field(
+        default=None,
+        max_length=10,  # Allow more context for general conversations
+        description="Last messages for follow-up context"
+    )
+    
+    # Voice mode: concise responses for speech
+    voice_mode: bool = Field(
+        default=False,
+        description="Voice mode: generates concise 2-3 sentence responses"
+    )
+
+
+@router.post(
+    "/ask/general/stream",
+    responses={
+        401: {"description": "Not authenticated"},
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        500: {"model": ErrorResponse, "description": "Internal error"}
+    }
+)
+async def ask_general_stream(
+    request: GeneralAskRequest,
+    current_user: CurrentUser,
+):
+    """
+    General AI chat without RAG retrieval (Learning/AI Tutor mode).
+    
+    Returns a Server-Sent Events (SSE) stream. This endpoint skips
+    the RAG pipeline entirely for fast, general-purpose AI responses.
+    No course material retrieval — uses LLM's full knowledge base.
+    
+    Used for the "Learning" mode where students want general tutoring
+    without being limited to specific course content.
+    """
+    
+    async def generate_stream():
+        """Generator for SSE stream."""
+        try:
+            # Convert context messages
+            context_messages = None
+            if request.context_messages:
+                context_messages = [
+                    ContextMessage(role=msg.role, content=msg.content)
+                    for msg in request.context_messages
+                ]
+            
+            # Create general chat service (no DB needed)
+            service = GeneralChatService()
+            
+            # Stream the response
+            async for event in service.respond_stream(
+                question=request.question,
+                context_messages=context_messages,
+                voice_mode=request.voice_mode,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+                
+        except Exception as e:
+            logger.error(f"General chat streaming error: {str(e)}", exc_info=True)
+            error_event = {"type": "error", "data": "An error occurred processing your request"}
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# ─── Learning Tools Endpoint ──────────────────────────────────────
+
+class GenerateToolRequest(BaseModel):
+    """Request to generate a learning tool (quiz, flashcards, notes)."""
+    course_id: UUID
+    tool_type: str = Field(..., pattern="^(quiz|flashcards|notes)$")
+    topic: Optional[str] = Field(default=None, max_length=500)
+    session_filter: Optional[str] = None
+    num_items: Optional[int] = Field(default=None, ge=3, le=15)
+
+
+class GenerateToolResponse(BaseModel):
+    """Response with generated learning tool content."""
+    tool_type: str
+    data: dict
+
+
+@router.post(
+    "/tools/generate",
+    response_model=GenerateToolResponse,
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"model": ErrorResponse, "description": "Access denied"},
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        500: {"model": ErrorResponse, "description": "Internal error"},
+    },
+)
+async def generate_learning_tool(
+    request: GenerateToolRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a quiz, flashcard deck, or study notes from course material.
+    
+    Uses RAG retrieval to get relevant content, then LLM to produce
+    structured educational content.
+    """
+    try:
+        # 1. Retrieve relevant chunks (use more for learning tools)
+        query = request.topic or "key concepts and important topics"
+        
+        retrieval_service = RetrievalService(db)
+        
+        # When session is explicitly selected, don't exclude assignments
+        exclude_assignments = not bool(request.session_filter)
+        
+        retrieval_result = await retrieval_service.retrieve(
+            RetrievalRequest(
+                student_id=current_user.id,
+                course_id=request.course_id,
+                query=query,
+                top_k=10,  # More chunks for richer content
+                exclude_assignments=exclude_assignments,
+                session_filter=request.session_filter,
+            )
+        )
+        
+        if not retrieval_result.chunks:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No course material found. Please check the course has content.",
+            )
+        
+        # 2. Generate tool content
+        tools_service = LearningToolsService()
+        
+        if request.tool_type == "quiz":
+            data = await tools_service.generate_quiz(
+                retrieval_result,
+                num_items=request.num_items or 5,
+                session_id=request.session_filter,
+            )
+        elif request.tool_type == "flashcards":
+            data = await tools_service.generate_flashcards(
+                retrieval_result,
+                num_items=request.num_items or 8,
+                session_id=request.session_filter,
+            )
+        elif request.tool_type == "notes":
+            data = await tools_service.generate_notes(
+                retrieval_result,
+                session_id=request.session_filter,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown tool type: {request.tool_type}",
+            )
+        
+        logger.info(
+            f"Generated {request.tool_type} for course {request.course_id} "
+            f"(session={request.session_filter})"
+        )
+        
+        return GenerateToolResponse(
+            tool_type=request.tool_type,
+            data=data,
+        )
+    
+    except AccessDeniedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Learning tool generation error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate learning content. Please try again.",
+        )

@@ -290,20 +290,32 @@ class LocalEmbeddingService(EmbeddingService):
             raise
 
 
-# Factory function for dependency injection
+# Singleton cache for embedding service (avoids reloading 1.2GB model per request)
+_embedding_service_cache: Optional[EmbeddingService] = None
+
+
 def get_embedding_service() -> EmbeddingService:
     """
-    Get the configured embedding service.
+    Get the configured embedding service (cached singleton).
     
     Auto-selects:
     - LocalEmbeddingService (E5-large-v2) if GEMINI_API_KEY is empty or USE_LOCAL_EMBEDDINGS=True
     - GeminiEmbeddingService otherwise
+    
+    The service is cached to avoid reloading the model on every request.
     """
+    global _embedding_service_cache
+    
+    if _embedding_service_cache is not None:
+        return _embedding_service_cache
+    
     use_local = settings.USE_LOCAL_EMBEDDINGS or not settings.GEMINI_API_KEY
     
     if use_local:
-        logger.info("Using local embedding model (E5-large-v2) for development")
-        return LocalEmbeddingService()
+        logger.info("Using local embedding model (E5-large-v2) — loading once...")
+        _embedding_service_cache = LocalEmbeddingService()
     else:
         logger.info("Using Gemini embedding model for production")
-        return GeminiEmbeddingService()
+        _embedding_service_cache = GeminiEmbeddingService()
+    
+    return _embedding_service_cache

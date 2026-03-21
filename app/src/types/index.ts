@@ -1,3 +1,12 @@
+// ==================== Chat Modes ====================
+
+/**
+ * Two platform modes:
+ * - doubt-clearing: RAG pipeline + canvas (quiz/flashcards/notes), no voice
+ * - learning: General LLM + voice, no canvas, fast responses
+ */
+export type ChatMode = 'doubt-clearing' | 'learning';
+
 // ==================== Auth ====================
 
 export interface User {
@@ -67,6 +76,18 @@ export interface AskRequest {
   
   // Response mode: "strict" = context-only, "enhanced" = AI elaborates
   response_mode?: 'strict' | 'enhanced';
+  
+  // Voice mode: concise responses, skip validation for speed
+  voice_mode?: boolean;
+}
+
+/**
+ * Request for general chat (Learning mode, no RAG).
+ */
+export interface GeneralAskRequest {
+  question: string;
+  context_messages?: ContextMessage[];
+  voice_mode?: boolean;
 }
 
 export interface SourceReference {
@@ -198,4 +219,61 @@ export interface StepItem {
   title: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
+}
+
+// ==================== Learning Tools (Canvas) ====================
+
+export type CanvasToolType = 'quiz' | 'flashcards' | 'notes' | null;
+
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+  difficulty: 'easy' | 'medium' | 'hard';
+}
+
+export interface QuizData {
+  title: string;
+  topic: string;
+  questions: QuizQuestion[];
+  session_id?: string;
+}
+
+export interface FlashCard {
+  id: string;
+  front: string;
+  back: string;
+  category?: string;
+}
+
+export interface FlashCardDeck {
+  title: string;
+  topic: string;
+  cards: FlashCard[];
+  session_id?: string;
+}
+
+export interface StudyNote {
+  title: string;
+  topic: string;
+  summary: string;
+  key_points: string[];
+  definitions: { term: string; definition: string }[];
+  examples: string[];
+  session_id?: string;
+}
+
+export interface GenerateToolRequest {
+  course_id: string;
+  tool_type: 'quiz' | 'flashcards' | 'notes';
+  topic?: string;
+  session_filter?: string;
+  num_items?: number;
+}
+
+export interface GenerateToolResponse {
+  tool_type: 'quiz' | 'flashcards' | 'notes';
+  data: QuizData | FlashCardDeck | StudyNote;
 }
