@@ -4,6 +4,48 @@ Multi-tenant, course-scoped AI Tutor API with RAG-based knowledge retrieval.
 
 ## Quick Start
 
+### Full Project Setup (Backend & Frontend)
+
+**Prerequisites:**
+- Docker Desktop running
+- Node.js (v20+ LTS)
+- Stop local PostgreSQL services to free port 5432
+
+**1. Clone and Configure:**
+```bash
+git clone https://github.com/tanishksoni90/AI-Tutor.git
+cd AI-Tutor
+cp .env.example .env # Use `copy` on Windows
+# Add your environment variables in .env (e.g., GEMINI_API_KEY)
+```
+
+**2. Start Backend Infrastructure:**
+```bash
+docker-compose up -d
+# Wait ~15 seconds for DB to initialize
+```
+
+**3. Setup Database and Services:**
+```bash
+poetry install
+poetry run alembic upgrade head
+poetry run python scripts/init_qdrant.py
+```
+
+**4. Start Backend Server:**
+```bash
+poetry run uvicorn src.main:app --reload
+```
+*(Leave running)*
+
+**5. Setup and Start Frontend:**
+Open a new terminal:
+```bash
+cd app
+npm install
+npm run dev
+```
+
 ### Development Mode (No Docker, No API Keys)
 
 ```bash
